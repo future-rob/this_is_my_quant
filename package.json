@@ -1,0 +1,45 @@
+{
+  "name": "jupiter-exchange-automation",
+  "version": "1.0.0",
+  "description": "A Node.js TypeScript project using Playwright for Jupiter Exchange automation",
+  "main": "dist/index.js",
+  "scripts": {
+    "start": "npm run build && node dist/index.js",
+    "start-vision-ai": "npm run build && node dist/vision-ai.js",
+    "auto-trader": "npm run build && node dist/auto-trader.js",
+    "test-sounds": "npm run build && node dist/test-sounds.js",
+    "dev": "ts-node src/index.ts",
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:debug": "playwright test --debug",
+    "install-browsers": "playwright install"
+  },
+  "keywords": [
+    "playwright",
+    "automation",
+    "typescript",
+    "nodejs",
+    "web-scraping"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "devDependencies": {
+    "@playwright/test": "^1.40.0",
+    "@types/node": "^20.10.0",
+    "@types/play-sound": "^1.1.2",
+    "@types/sharp": "^0.31.1",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "openai": "^5.8.2",
+    "play-sound": "^1.1.6",
+    "playwright": "^1.40.0",
+    "sharp": "^0.34.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
