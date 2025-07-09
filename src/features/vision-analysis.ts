@@ -96,6 +96,7 @@ export interface TradingVerdict {
   timeHorizon: "short" | "medium" | "long"; // short=intraday, medium=days, long=weeks
   riskLevel: "LOW" | "MEDIUM" | "HIGH";
   keyReason: string; // Single sentence reasoning
+  nextCheckMinutes: number; // Minutes until next analysis (2-60 range)
   entryPrice?: number;
   stopLoss?: number;
   takeProfit?: number;
@@ -167,6 +168,7 @@ const saveAnalysisToJson = (
       confidence: result.tradingDecision?.confidence,
       finalAction: result.finalVerdict?.action,
       finalConfidence: result.finalVerdict?.confidence,
+      nextCheckMinutes: result.finalVerdict?.nextCheckMinutes,
     },
   };
 
@@ -327,6 +329,7 @@ const saveAnalysisToText = (
     report += `POSITION SIZE: ${verdict.positionSize}% of portfolio\n`;
     report += `TIME HORIZON: ${verdict.timeHorizon.toUpperCase()}\n`;
     report += `RISK LEVEL: ${verdict.riskLevel}\n`;
+    report += `NEXT CHECK: ${verdict.nextCheckMinutes} minutes\n`;
     report += `\nKEY REASON: ${verdict.keyReason}\n`;
 
     if (verdict.action !== "HOLD") {
@@ -750,6 +753,12 @@ Guidelines:
 - timeHorizon: short=intraday, medium=days, long=weeks
 - riskLevel: Based on market conditions and setup quality
 - keyReason: One clear sentence why this action is best
+- nextCheckMinutes: When to check again (2-60 minutes). Consider:
+  * High volatility/uncertainty: 2-5 minutes
+  * Strong signals with breakout potential: 5-10 minutes
+  * Normal market conditions: 10-15 minutes
+  * Consolidation/low volatility: 15-30 minutes
+  * Strong trend continuation: 30-60 minutes
 - Include entry/exit levels only if action is LONG or SHORT
 - criticalWarnings: Key risks that could invalidate the decision
 
@@ -797,6 +806,13 @@ BE DECISIVE. This is the final call that will be acted upon.`;
               description:
                 "Single sentence explaining why this decision is best",
             },
+            nextCheckMinutes: {
+              type: "integer",
+              minimum: 2,
+              maximum: 60,
+              description:
+                "Minutes until next analysis check (2-60 range based on market conditions)",
+            },
             entryPrice: {
               type: "number",
               description: "Entry price (only for LONG/SHORT actions)",
@@ -824,6 +840,7 @@ BE DECISIVE. This is the final call that will be acted upon.`;
             "timeHorizon",
             "riskLevel",
             "keyReason",
+            "nextCheckMinutes",
             "criticalWarnings",
           ],
           additionalProperties: false,
@@ -855,6 +872,9 @@ BE DECISIVE. This is the final call that will be acted upon.`;
 
     logger.info(
       `⚡ Final Verdict: ${verdict.action} (${verdict.confidence}% confidence)`
+    );
+    logger.info(
+      `⏰ Next check scheduled in ${verdict.nextCheckMinutes} minutes`
     );
     stepLogger.complete();
 

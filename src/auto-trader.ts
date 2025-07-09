@@ -2,6 +2,8 @@
 
 import { spawn } from "child_process";
 import { logger } from "./utils/logger";
+import fs from "fs";
+import path from "path";
 
 /**
  * Configuration for the auto trader
@@ -148,6 +150,73 @@ async function waitMinutes(minutes: number): Promise<void> {
 }
 
 /**
+ * Extract next check interval from analysis results
+ */
+function extractNextCheckInterval(defaultInterval: number): number {
+  const analysisDir = "analysis-results";
+  const MIN_INTERVAL = 2;
+  const MAX_INTERVAL = 60;
+
+  try {
+    // Find the most recent analysis file
+    if (!fs.existsSync(analysisDir)) {
+      logger.warn(`⚠️  Analysis directory not found: ${analysisDir}`);
+      return defaultInterval;
+    }
+
+    const files = fs
+      .readdirSync(analysisDir)
+      .filter((file) => file.startsWith("analysis-") && file.endsWith(".json"))
+      .sort()
+      .reverse(); // Most recent first
+
+    if (files.length === 0) {
+      logger.warn(`⚠️  No analysis files found in ${analysisDir}`);
+      return defaultInterval;
+    }
+
+    const latestFilename = files[0];
+    if (!latestFilename) {
+      logger.warn(`⚠️  No analysis files found in ${analysisDir}`);
+      return defaultInterval;
+    }
+
+    const latestFile = path.join(analysisDir, latestFilename);
+    const analysisData = JSON.parse(fs.readFileSync(latestFile, "utf8"));
+
+    const nextCheckMinutes =
+      analysisData?.analysisData?.finalVerdict?.nextCheckMinutes;
+
+    if (typeof nextCheckMinutes === "number") {
+      // Apply bounds checking
+      const boundedInterval = Math.max(
+        MIN_INTERVAL,
+        Math.min(MAX_INTERVAL, nextCheckMinutes)
+      );
+
+      if (boundedInterval !== nextCheckMinutes) {
+        logger.warn(
+          `⚠️  AI recommended ${nextCheckMinutes} minutes, bounded to ${boundedInterval} minutes`
+        );
+      }
+
+      logger.info(
+        `🤖 AI recommends next check in ${boundedInterval} minutes (was ${defaultInterval} minutes)`
+      );
+      return boundedInterval;
+    } else {
+      logger.warn(`⚠️  Invalid nextCheckMinutes value: ${nextCheckMinutes}`);
+      return defaultInterval;
+    }
+  } catch (error) {
+    logger.error(
+      `❌ Error extracting next check interval: ${(error as Error).message}`
+    );
+    return defaultInterval;
+  }
+}
+
+/**
  * Run single analysis cycle
  */
 async function runAnalysisCycle(
@@ -203,7 +272,7 @@ async function runAnalysisCycle(
   logger.success(
     `✅ Analysis Cycle #${cycleNumber} completed successfully in ${duration}s`
   );
-  logger.info(`🎯 Next cycle will start in ${config.intervalMinutes} minutes`);
+  logger.info(`🎯 Next cycle timing will be determined by AI recommendation`);
   logger.info(`${"=".repeat(60)}`);
 
   return true;
@@ -216,7 +285,9 @@ async function runAutoTrader(
   config: AutoTraderConfig = DEFAULT_CONFIG
 ): Promise<void> {
   logger.info(`🚀 Jupiter Exchange Auto Trader Started`);
-  logger.info(`⏰ Running every ${config.intervalMinutes} minutes`);
+  logger.info(
+    `⏰ Default interval: ${config.intervalMinutes} minutes (AI will adjust dynamically)`
+  );
   logger.info(
     `📊 Chart timeframes: ${
       config.chartCaptureArgs.find((arg) => arg.includes(",")) ?? "default"
@@ -245,9 +316,13 @@ async function runAutoTrader(
 
         // Wait for next cycle (except for the first cycle when testing)
         if (cycleNumber > 1 || process.argv.includes("--continuous")) {
-          await waitMinutes(config.intervalMinutes);
+          // Extract dynamic interval from AI recommendation
+          const nextInterval = extractNextCheckInterval(config.intervalMinutes);
+          await waitMinutes(nextInterval);
         } else if (!process.argv.includes("--once")) {
-          await waitMinutes(config.intervalMinutes);
+          // Extract dynamic interval from AI recommendation
+          const nextInterval = extractNextCheckInterval(config.intervalMinutes);
+          await waitMinutes(nextInterval);
         } else {
           logger.info(
             `🎯 Single cycle completed. Use --continuous for continuous operation.`
@@ -388,12 +463,12 @@ function showHelp(): void {
   console.log(`
 🤖 Jupiter Exchange Auto Trader
 
-Automatically captures charts and runs AI analysis every 13 minutes.
+Automatically captures charts and runs AI analysis. The AI determines the optimal interval for each check based on market conditions.
 
 Usage: npm run auto-trader [options]
 
 Options:
-  --interval <minutes>     Interval between analyses (default: 13)
+  --interval <minutes>     Default interval between analyses (default: 13, AI will adjust dynamically)
   --timeframes <list>      Comma-separated timeframes (default: 5m,15m,1h,2h,6h)
   --model <model>          AI model to use (default: gpt-4o)
   --no-sound               Disable sound effects
@@ -407,9 +482,9 @@ Options:
   --help, -h              Show this help message
 
 Examples:
-  npm run auto-trader                                    # Run every 13 minutes with cropping
-  npm run auto-trader -- --interval 15                  # Run every 15 minutes  
-  npm run auto-trader -- --timeframes 5m,1h,6h          # Custom timeframes
+  npm run auto-trader                                    # Run with AI-determined intervals (default fallback: 13 min)
+  npm run auto-trader -- --interval 15                  # Default 15 minutes, AI adjusts dynamically
+  npm run auto-trader -- --timeframes 5m,1h,6h          # Custom timeframes with dynamic intervals
   npm run auto-trader -- --model gpt-4o-mini --once     # Single run with cheap model
   npm run auto-trader -- --no-sound                     # Disable sound effects
   npm run auto-trader -- --sound-volume 0.3             # Lower volume sound effects
