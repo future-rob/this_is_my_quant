@@ -1,7 +1,10 @@
 import {
   BrowserSession,
+  BrowserConfig,
   navigateToUrl,
   takeScreenshot,
+  createBrowserSession,
+  closeBrowserSession,
 } from "../utils/browser";
 import { logger, createStepLogger } from "../utils/logger";
 import { getPageInfo, waitForElement } from "../components/page-actions";
@@ -163,8 +166,83 @@ export const executeWebAutomation = async (
 };
 
 /**
+ * Capture screenshot for a single timeframe with its own browser session
+ */
+export const captureTimeframeScreenshot = async (
+  timeframe: string,
+  config: {
+    url: string;
+    waitTime?: number;
+    screenshotWaitTime?: number;
+    browserConfig?: BrowserConfig;
+  }
+): Promise<{
+  timeframe: string;
+  success: boolean;
+  screenshot?: string;
+  error?: string;
+}> => {
+  const timeframeStepLogger = createStepLogger(`Timeframe ${timeframe}`);
+
+  try {
+    timeframeStepLogger.start();
+    logger.info(`🔄 Processing timeframe: ${timeframe}`);
+
+    // Create dedicated browser session for this timeframe
+    const session = await createBrowserSession(config.browserConfig);
+
+    try {
+      const { page } = session;
+
+      // Navigate to the URL
+      await navigateToUrl(page, config.url, {
+        waitUntil: "domcontentloaded",
+      });
+      await page.waitForTimeout(3000); // Initial page load wait
+
+      // Apply chart settings for this specific timeframe
+      await applyChartSettingsForTimeframe(session, timeframe);
+
+      // Wait for chart to load and process the new timeframe
+      const waitTime = config.screenshotWaitTime || config.waitTime || 8000;
+      logger.info(`⏳ Waiting ${waitTime}ms for ${timeframe} chart to load...`);
+      await page.waitForTimeout(waitTime);
+
+      // Take screenshot for this timeframe
+      const screenshotPath = await takeScreenshot(
+        page,
+        `jupiter-${timeframe}.png`
+      );
+      logger.info(`📸 Screenshot captured for ${timeframe}: ${screenshotPath}`);
+
+      timeframeStepLogger.complete();
+
+      return {
+        timeframe,
+        success: true,
+        screenshot: screenshotPath,
+      };
+    } finally {
+      // Always close the browser session
+      await closeBrowserSession(session);
+    }
+  } catch (error) {
+    timeframeStepLogger.error(error as Error);
+    logger.warn(
+      `❌ Failed to process timeframe ${timeframe}: ${(error as Error).message}`
+    );
+
+    return {
+      timeframe,
+      success: false,
+      error: (error as Error).message,
+    };
+  }
+};
+
+/**
  * Multi-timeframe automation for Jupiter Exchange
- * Cycles through different timeframes and captures screenshots for each
+ * Captures screenshots for multiple timeframes in parallel using separate browser sessions
  */
 export const executeMultiTimeframeAutomation = async (
   session: BrowserSession,
@@ -179,86 +257,62 @@ export const executeMultiTimeframeAutomation = async (
   }
 ): Promise<MultiTimeframeResult> => {
   const stepLogger = createStepLogger("Multi-Timeframe Automation");
-  const { page } = session;
   const timeframes = config.timeframes || ["5m", "15m", "1h", "2h", "6h"];
-  const results: MultiTimeframeResult["results"] = [];
+  let results: MultiTimeframeResult["results"] = [];
   let totalScreenshots = 0;
 
   try {
     stepLogger.start();
     logger.info(
-      `📊 Starting multi-timeframe automation for ${
+      `📊 Starting parallel multi-timeframe automation for ${
         timeframes.length
       } timeframes: ${timeframes.join(", ")}`
     );
 
-    for (let i = 0; i < timeframes.length; i++) {
-      const timeframe = timeframes[i];
-      if (!timeframe) continue;
+    const startTime = Date.now();
+    logger.info(
+      `🚀 Running ${timeframes.length} browser sessions in parallel for maximum speed...`
+    );
 
-      const timeframeStepLogger = createStepLogger(`Timeframe ${timeframe}`);
+    // Create browser config from the provided session
+    const browserConfig: BrowserConfig = {
+      headless: true, // Use headless by default for parallel execution
+      slowMo: 0,
+      viewport: { width: 1920, height: 1080 },
+      timeout: 30000,
+    };
 
-      try {
-        timeframeStepLogger.start();
-        logger.info(
-          `🔄 Processing timeframe ${i + 1}/${timeframes.length}: ${timeframe}`
-        );
+    // Create timeframe capture promises for parallel execution
+    const capturePromises = timeframes.map((timeframe) => {
+      const captureConfig: Parameters<typeof captureTimeframeScreenshot>[1] = {
+        url: config.url,
+        browserConfig,
+      };
 
-        // Navigate to the URL (or reload if not first iteration)
-        if (i === 0) {
-          await navigateToUrl(page, config.url, {
-            waitUntil: "domcontentloaded",
-          });
-          await page.waitForTimeout(3000);
-        } else {
-          logger.info("🔄 Reloading page for next timeframe...");
-          await page.reload({ waitUntil: "domcontentloaded" });
-          await page.waitForTimeout(2000);
-        }
-
-        // Apply chart settings for this specific timeframe
-        await applyChartSettingsForTimeframe(session, timeframe);
-
-        // Wait for chart to load and process the new timeframe
-        const waitTime = config.screenshotWaitTime || config.waitTime || 8000;
-        logger.info(
-          `⏳ Waiting ${waitTime}ms for ${timeframe} chart to load...`
-        );
-        await page.waitForTimeout(waitTime);
-
-        // Take screenshot for this timeframe
-        const screenshotPath = await takeScreenshot(
-          page,
-          `jupiter-${timeframe}.png`
-        );
-        logger.info(
-          `📸 Screenshot captured for ${timeframe}: ${screenshotPath}`
-        );
-
-        results.push({
-          timeframe,
-          success: true,
-          screenshot: screenshotPath,
-        });
-        totalScreenshots++;
-
-        timeframeStepLogger.complete();
-      } catch (error) {
-        timeframeStepLogger.error(error as Error);
-        results.push({
-          timeframe,
-          success: false,
-          error: (error as Error).message,
-        });
-        logger.warn(
-          `❌ Failed to process timeframe ${timeframe}: ${
-            (error as Error).message
-          }`
-        );
+      if (config.waitTime !== undefined) {
+        captureConfig.waitTime = config.waitTime;
       }
-    }
 
+      if (config.screenshotWaitTime !== undefined) {
+        captureConfig.screenshotWaitTime = config.screenshotWaitTime;
+      }
+
+      return captureTimeframeScreenshot(timeframe, captureConfig);
+    });
+
+    // Execute all timeframe captures in parallel
+    results = await Promise.all(capturePromises);
+
+    const endTime = Date.now();
+    const executionTime = ((endTime - startTime) / 1000).toFixed(2);
     const successCount = results.filter((r) => r.success).length;
+    totalScreenshots = successCount;
+
+    logger.success(
+      `⚡ Parallel execution completed in ${executionTime}s (vs ~${
+        timeframes.length * 8
+      }s sequential)`
+    );
     logger.info(
       `✅ Multi-timeframe automation completed: ${successCount}/${timeframes.length} timeframes successful`
     );
