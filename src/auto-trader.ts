@@ -200,9 +200,7 @@ function extractNextCheckInterval(defaultInterval: number): number {
         );
       }
 
-      logger.info(
-        `🤖 AI recommends next check in ${boundedInterval} minutes (was ${defaultInterval} minutes)`
-      );
+      logger.info(`🤖 AI recommends next check in ${boundedInterval} minutes`);
       return boundedInterval;
     } else {
       logger.warn(`⚠️  Invalid nextCheckMinutes value: ${nextCheckMinutes}`);

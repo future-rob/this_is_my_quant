@@ -90,11 +90,11 @@ export const executeWebAutomation = async (
     );
 
     // Navigate to the target URL
-    await navigateToUrl(page, config.url, { waitUntil: "domcontentloaded" });
+    await navigateToUrl(page, config.url, { waitUntil: "networkidle" }); // Changed from "domcontentloaded"
 
     // Wait a bit for JavaScript to load
     logger.info("Waiting for page to load...");
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(8000); // Increased from 5000ms to 8000ms
 
     // Apply chart settings if requested
     if (config.applyChartSettings) {
@@ -124,6 +124,44 @@ export const executeWebAutomation = async (
       logger.info(`Waiting ${config.waitTime}ms for page to fully load...`);
       try {
         await page.waitForTimeout(config.waitTime);
+
+        // Wait for specific Jupiter chart elements to be loaded
+        try {
+          logger.info("🎯 Waiting for Jupiter chart elements to load...");
+          await page.waitForSelector(
+            '[data-testid="trading-view"], canvas, iframe[src*="tradingview"], [class*="tv-"], [id*="tradingview"]',
+            {
+              state: "visible",
+              timeout: 15000,
+            }
+          );
+          logger.info("✅ Jupiter chart elements found");
+        } catch (error) {
+          logger.warn(
+            "⚠️ Jupiter chart elements check timed out, continuing..."
+          );
+        }
+
+        // Check for loading spinners before final screenshot
+        try {
+          logger.info("🔄 Checking for loading spinners...");
+          await page.waitForSelector(
+            'svg circle[class*="loading"], .loading-spinner, [class*="spinner"], [class*="Loading"], svg[class*="animate-spin"]',
+            { state: "hidden", timeout: 15000 }
+          ); // Increased timeout and added more selectors
+          logger.info("✅ Loading spinners cleared");
+        } catch (error) {
+          logger.warn("⚠️ Loading spinner check timed out, continuing...");
+        }
+
+        // Wait for network to be idle
+        try {
+          logger.info("🌐 Waiting for network to be idle...");
+          await page.waitForLoadState("networkidle", { timeout: 10000 });
+          logger.info("✅ Network is idle");
+        } catch (error) {
+          logger.warn("⚠️ Network idle check timed out, continuing...");
+        }
 
         // Take final screenshot after wait
         const finalScreenshot = await takeScreenshot(
@@ -196,17 +234,56 @@ export const captureTimeframeScreenshot = async (
 
       // Navigate to the URL
       await navigateToUrl(page, config.url, {
-        waitUntil: "domcontentloaded",
+        waitUntil: "networkidle", // Changed from "domcontentloaded" to "networkidle"
       });
-      await page.waitForTimeout(3000); // Initial page load wait
+      await page.waitForTimeout(8000); // Increased from 5000ms to 8000ms
 
       // Apply chart settings for this specific timeframe
       await applyChartSettingsForTimeframe(session, timeframe);
 
       // Wait for chart to load and process the new timeframe
-      const waitTime = config.screenshotWaitTime || config.waitTime || 8000;
+      const waitTime = config.screenshotWaitTime || config.waitTime || 25000; // Increased from 15000ms to 25000ms
       logger.info(`⏳ Waiting ${waitTime}ms for ${timeframe} chart to load...`);
       await page.waitForTimeout(waitTime);
+
+      // Wait for specific Jupiter chart elements to be loaded
+      try {
+        logger.info("🎯 Waiting for Jupiter chart elements to load...");
+        await page.waitForSelector(
+          '[data-testid="trading-view"], canvas, iframe[src*="tradingview"], [class*="tv-"], [id*="tradingview"]',
+          {
+            state: "visible",
+            timeout: 15000,
+          }
+        );
+        logger.info("✅ Jupiter chart elements found");
+      } catch (error) {
+        logger.warn("⚠️ Jupiter chart elements check timed out, continuing...");
+      }
+
+      // Additional wait for any loading spinners to disappear
+      try {
+        logger.info("🔄 Checking for loading spinners...");
+        await page.waitForSelector(
+          'svg circle[class*="loading"], .loading-spinner, [class*="spinner"], [class*="Loading"], svg[class*="animate-spin"]',
+          { state: "hidden", timeout: 15000 } // Increased from 10000ms to 15000ms
+        );
+        logger.info("✅ Loading spinners cleared");
+      } catch (error) {
+        logger.warn("⚠️ Loading spinner check timed out, continuing...");
+      }
+
+      // Wait for network to be idle (no requests for 500ms)
+      try {
+        logger.info("🌐 Waiting for network to be idle...");
+        await page.waitForLoadState("networkidle", { timeout: 10000 });
+        logger.info("✅ Network is idle");
+      } catch (error) {
+        logger.warn("⚠️ Network idle check timed out, continuing...");
+      }
+
+      // Final wait to ensure chart is fully rendered
+      await page.waitForTimeout(5000); // Increased from 3000ms to 5000ms
 
       // Take screenshot for this timeframe
       const screenshotPath = await takeScreenshot(
@@ -422,6 +499,8 @@ const applyViaLocalStorage = async (page: any): Promise<void> => {
           "chartLayout",
           "tvcoins_chart_layout",
           "TRADING_VIEW_STATE",
+          "banner-perps-perps-price-impact-update",
+          "banner-perps-perps-max-position-size-increase",
         ];
 
         const settingsJson = JSON.stringify(settingsData);
@@ -437,6 +516,15 @@ const applyViaLocalStorage = async (page: any): Promise<void> => {
         );
         localStorage.setItem("chart_theme", JSON.stringify(theme));
 
+        // Dismiss banner notifications
+        localStorage.setItem(
+          "banner-perps-perps-max-position-size-increase",
+          "1"
+        );
+
+        // Dismiss banner notifications
+        localStorage.setItem("banner-perps-perps-price-impact-update", "1");
+
         console.log("Chart settings injected into localStorage");
       } catch (e) {
         console.error("Failed to inject chart settings:", e);
@@ -447,8 +535,8 @@ const applyViaLocalStorage = async (page: any): Promise<void> => {
 
   // Refresh the page to apply settings
   logger.info("🔄 Refreshing page to apply localStorage settings...");
-  await page.reload({ waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(2000);
+  await page.reload({ waitUntil: "networkidle" }); // Changed from "domcontentloaded"
+  await page.waitForTimeout(8000); // Increased from 5000ms to 8000ms
 };
 
 /**
@@ -517,6 +605,15 @@ const applyViaDirect = async (page: any): Promise<void> => {
         );
         localStorage.setItem("chart_theme", JSON.stringify(theme));
 
+        // Dismiss banner notifications
+        localStorage.setItem(
+          "banner-perps-perps-max-position-size-increase",
+          "1"
+        );
+
+        // Dismiss banner notifications
+        localStorage.setItem("banner-perps-perps-price-impact-update", "1");
+
         // Try to apply theme directly to the page
         document.body.style.backgroundColor = theme.background;
         document.documentElement.style.setProperty(
@@ -555,7 +652,7 @@ const applyViaDirect = async (page: any): Promise<void> => {
   );
 
   logger.info("⏳ Settings applied directly, waiting for page to process...");
-  await page.waitForTimeout(1000);
+  await page.waitForTimeout(5000); // Increased from 3000ms to 5000ms
 };
 
 /**
@@ -600,6 +697,15 @@ const applyViaJupiterKeys = async (page: any): Promise<void> => {
           theme.background === "#0b0e13" ? "Dark" : "Light"
         );
 
+        // Dismiss banner notifications
+        localStorage.setItem(
+          "banner-perps-perps-max-position-size-increase",
+          "1"
+        );
+
+        // Dismiss banner notifications
+        localStorage.setItem("banner-perps-perps-price-impact-update", "1");
+
         // Try to apply the main series properties specifically
         if (
           settingsData.charts &&
@@ -629,7 +735,7 @@ const applyViaJupiterKeys = async (page: any): Promise<void> => {
   );
 
   logger.info("⏳ Jupiter settings applied, waiting for page to process...");
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(8000); // Increased from 5000ms to 8000ms
 };
 
 /**
@@ -694,6 +800,15 @@ const applyChartSettingsForTimeframe = async (
         );
         localStorage.setItem("chart_theme", JSON.stringify(theme));
 
+        // Dismiss banner notifications
+        localStorage.setItem(
+          "banner-perps-perps-max-position-size-increase",
+          "1"
+        );
+
+        // Dismiss banner notifications
+        localStorage.setItem("banner-perps-perps-price-impact-update", "1");
+
         console.log(`Chart settings applied for timeframe: ${tf}`);
         console.log(
           `Interval set to: ${settingsData.charts[0].panes[0].sources[0].state.interval} minutes`
@@ -718,8 +833,8 @@ const applyChartSettingsForTimeframe = async (
 
   // Refresh page to apply the settings
   logger.info("🔄 Refreshing page to apply settings...");
-  await page.reload({ waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(2000);
+  await page.reload({ waitUntil: "networkidle" }); // Changed from "domcontentloaded"
+  await page.waitForTimeout(8000); // Increased from 5000ms to 8000ms
 };
 
 /**
@@ -743,7 +858,7 @@ export const createWebAutomationConfig = (
   const config: WebAutomationConfig = {
     url,
     screenshots: options.screenshots ?? true,
-    waitTime: options.waitTime ?? 3000,
+    waitTime: options.waitTime ?? 8000, // Increased from 5000ms to 8000ms
     applyChartSettings: options.applyChartSettings ?? true,
     chartSettingsMethod: options.chartSettingsMethod ?? "jupiter",
   };
@@ -761,7 +876,7 @@ export const createWebAutomationConfig = (
 export const createJupiterAutomation = (): WebAutomationConfig => ({
   url: "https://jup.ag/perps/short/USDC-WBTC",
   screenshots: true,
-  waitTime: 5000,
+  waitTime: 20000, // Increased from 12000ms to 20000ms
   elementToWaitFor:
     '[data-testid="trading-view"], .trading-interface, main, [class*="trading"], [class*="perp"]',
   applyChartSettings: true,
@@ -776,7 +891,7 @@ export const createJupiterAutomationWithSettings = (
 ): WebAutomationConfig => ({
   url: "https://jup.ag/perps/short/USDC-WBTC",
   screenshots: true,
-  waitTime: 8000, // Longer wait for settings to apply
+  waitTime: 25000, // Increased from 15000ms to 25000ms
   applyChartSettings: true,
   chartSettingsMethod: method,
   elementToWaitFor:
