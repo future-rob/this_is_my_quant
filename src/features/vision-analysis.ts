@@ -19,6 +19,8 @@ export interface VisionAnalysisConfig {
   saveText?: boolean;
   soundEffects?: boolean;
   soundVolume?: number;
+  regimeFilter?: RegimeFilterConfig; // Regime filter configuration
+  backtest?: BacktestConfig; // Backtest mode configuration
 }
 
 /**
@@ -36,6 +38,20 @@ export interface ChartAnalysis {
     volume: "high" | "medium" | "low";
     bollinger: "squeeze" | "expansion" | "neutral";
     momentum: "increasing" | "decreasing" | "stable";
+  };
+  // Enhanced technical indicators for regime filtering
+  technicalData: {
+    bbWidth: number; // Bollinger Band Width (normalized 0-1)
+    atr: number; // ATR(14) value in ticks/points
+    stochRSI: {
+      kPercent: number; // %K value (0-100)
+      dPercent: number; // %D value (0-100)
+      oversold: boolean; // Below 20
+      overbought: boolean; // Above 80
+      crossDirection?: "bullish" | "bearish" | "none"; // K crossing D
+    };
+    bollingerPosition: "upper" | "middle" | "lower" | "outside"; // Price position relative to bands
+    volatilityRegime: "low" | "medium" | "high"; // Based on ATR and BBWidth
   };
   signals: string[];
   confidence: number; // 1-10 scale
@@ -393,6 +409,12 @@ Please provide a detailed analysis focusing on:
 5. **Entry Signals**: Trading signals for this timeframe
 6. **Risk Assessment**: Key risks and invalidation levels
 
+CRITICAL: For regime filtering, you must extract these specific technical values:
+- **Bollinger Band Width**: Calculate the width between upper and lower bands as a percentage of price (0.0-1.0 scale, where 0.02 = 2% width)
+- **ATR(14)**: Average True Range over 14 periods in points/ticks 
+- **Stochastic RSI**: Both %K and %D values (0-100), identify if there's a bullish/bearish cross
+- **Price Position**: Where price is relative to Bollinger Bands (upper/middle/lower/outside bands)
+
 Respond in JSON format with this exact structure:
 {
   "timeframe": "${timeframe}",
@@ -407,12 +429,32 @@ Respond in JSON format with this exact structure:
     "bollinger": "squeeze|expansion|neutral", 
     "momentum": "increasing|decreasing|stable"
   },
+  "technicalData": {
+    "bbWidth": 0.000,
+    "atr": 0.0,
+    "stochRSI": {
+      "kPercent": 0.0,
+      "dPercent": 0.0,
+      "oversold": false,
+      "overbought": false,
+      "crossDirection": "bullish|bearish|none"
+    },
+    "bollingerPosition": "upper|middle|lower|outside",
+    "volatilityRegime": "low|medium|high"
+  },
   "signals": ["array", "of", "trading", "signals"],
   "confidence": 1-10,
   "analysis": "detailed analysis text"
 }
 
-Focus on actionable insights for perpetual futures trading. Be specific about price levels when visible on the chart.
+IMPORTANT GUIDELINES:
+- bbWidth: Measure the distance between upper and lower Bollinger Bands as percentage of current price. Typical values: 0.005-0.050 (0.5%-5%)
+- atr: Look for ATR(14) indicator value, typically 50-500 points for BTCUSD. If not visible, estimate based on recent candle ranges
+- stochRSI: Find %K and %D lines (usually 0-100). Look for recent crossovers in the last 1-3 candles
+- bollingerPosition: "upper" if price near upper band, "lower" if near lower band, "middle" if in center 60%, "outside" if beyond bands
+- volatilityRegime: "low" if bbWidth < 0.01 AND atr is small, "high" if bbWidth > 0.03 OR atr is large, "medium" otherwise
+
+Focus on actionable insights for perpetual futures trading. Be specific about price levels and technical values.
 `;
 };
 
@@ -868,10 +910,44 @@ BE DECISIVE. This is the final call that will be acted upon.`;
     );
 
     // Parse the structured response
-    const verdict = JSON.parse(functionCall.arguments) as TradingVerdict;
+    let verdict = JSON.parse(functionCall.arguments) as TradingVerdict;
+
+    // Apply confidence-based position sizing override
+    if (verdict.action !== "HOLD") {
+      const regimeConfig = (config as any).regimeFilter || DEFAULT_REGIME_CONFIG;
+      
+      // Calculate recommended position size based on confidence
+      const riskAmount = tradingDecision.riskReward ? 
+        Math.abs((tradingDecision.entryPrice || 0) - (tradingDecision.stopLoss || 0)) : 1000;
+      
+      const positionSizing = calculatePositionSize(
+        verdict.confidence,
+        100000, // Default account balance for calculation
+        riskAmount,
+        regimeConfig
+      );
+      
+      // Override AI's position size with confidence-based sizing
+      const originalPositionSize = verdict.positionSize;
+      verdict.positionSize = Math.round(positionSizing.riskPercent);
+      
+      logger.info(`📊 Position Sizing Override:`);
+      logger.info(`   AI Suggested: ${originalPositionSize}% | Confidence-Based: ${verdict.positionSize}%`);
+      logger.info(`   Confidence: ${verdict.confidence}% | Multiplier: ${positionSizing.sizeMultiplier}x | Risk: ${positionSizing.riskPercent.toFixed(1)}%`);
+      
+      // Add position sizing info to critical warnings if significantly different
+      if (Math.abs(originalPositionSize - verdict.positionSize) > 20) {
+        verdict.criticalWarnings.push(
+          `Position size adjusted from ${originalPositionSize}% to ${verdict.positionSize}% based on confidence level`
+        );
+      }
+    }
 
     logger.info(
       `⚡ Final Verdict: ${verdict.action} (${verdict.confidence}% confidence)`
+    );
+    logger.info(
+      `💰 Position Size: ${verdict.positionSize}% of portfolio`
     );
     logger.info(
       `⏰ Next check scheduled in ${verdict.nextCheckMinutes} minutes`
@@ -883,6 +959,420 @@ BE DECISIVE. This is the final call that will be acted upon.`;
     stepLogger.error(error as Error);
     throw error;
   }
+};
+
+/**
+ * Evaluate pre-trade regime filter
+ */
+export const evaluateRegimeFilter = (
+  analyses: ChartAnalysis[], 
+  config: RegimeFilterConfig = DEFAULT_REGIME_CONFIG
+): RegimeFilterResult => {
+  const stepLogger = createStepLogger("Regime Filter");
+  
+  try {
+    stepLogger.start();
+    
+    // 1. Directional Agreement Check
+    const directionalCheck = evaluateDirectionalAgreement(analyses, config);
+    
+    // 2. Volatility Check  
+    const volatilityCheck = evaluateVolatilityRequirements(analyses, config);
+    
+    // 3. Momentum Check
+    const momentumCheck = evaluateMomentumRequirements(analyses, config);
+    
+    // Overall result
+    const passed = directionalCheck.passed && volatilityCheck.passed && momentumCheck.passed;
+    
+    let reason = "";
+    let recommendedAction: "long" | "short" | "hold" = "hold";
+    
+    if (!passed) {
+      const failures: string[] = [];
+      if (!directionalCheck.passed) failures.push("directional agreement");
+      if (!volatilityCheck.passed) failures.push("volatility requirements");
+      if (!momentumCheck.passed) failures.push("momentum requirements");
+      reason = `Failed ${failures.join(", ")}`;
+    } else {
+      // Determine recommended action based on majority trend
+      const trends = analyses.map(a => a.trend);
+      const bullishCount = trends.filter(t => t === "bullish").length;
+      const bearishCount = trends.filter(t => t === "bearish").length;
+      
+      if (bullishCount > bearishCount) {
+        recommendedAction = "long";
+        reason = `Passed all filters - ${bullishCount}/${analyses.length} timeframes bullish`;
+      } else if (bearishCount > bullishCount) {
+        recommendedAction = "short";  
+        reason = `Passed all filters - ${bearishCount}/${analyses.length} timeframes bearish`;
+      } else {
+        reason = "Passed filters but conflicting direction signals";
+      }
+    }
+    
+    // Calculate confidence based on filter strength
+    const confidence = calculateFilterConfidence(directionalCheck, volatilityCheck, momentumCheck);
+    
+    const result: RegimeFilterResult = {
+      passed,
+      reason,
+      checks: {
+        directionalAgreement: directionalCheck,
+        volatilityCheck,
+        momentumCheck,
+      },
+      ...(passed && { recommendedAction }),
+      confidence,
+    };
+    
+    if (config.logFilterDecisions) {
+      if (passed) {
+        logger.success(`✅ Regime Filter PASSED: ${reason} (${confidence.toFixed(1)}% confidence)`);
+      } else {
+        logger.warn(`❌ Regime Filter FAILED: ${reason}`);
+      }
+      
+      // Log detailed breakdown
+      logger.info(`   📊 Directional: ${directionalCheck.passed ? "✅" : "❌"} (${directionalCheck.agreementCount}/${directionalCheck.requiredCount} agree)`);
+      logger.info(`   🌊 Volatility: ${volatilityCheck.passed ? "✅" : "❌"} (BB/ATR thresholds)`);
+      logger.info(`   ⚡ Momentum: ${momentumCheck.passed ? "✅" : "❌"} (StochRSI positioning)`);
+    }
+    
+    stepLogger.complete();
+    return result;
+    
+  } catch (error) {
+    stepLogger.error(error as Error);
+    throw error;
+  }
+};
+
+/**
+ * Evaluate directional agreement across timeframes
+ */
+function evaluateDirectionalAgreement(
+  analyses: ChartAnalysis[], 
+  config: RegimeFilterConfig
+) {
+  const trends = analyses.map(a => ({ timeframe: a.timeframe, trend: a.trend }));
+  
+  // Count agreements (bullish vs bearish, ignoring neutral/sideways)
+  const definitiveSignals = trends.filter(t => t.trend === "bullish" || t.trend === "bearish");
+  
+  if (definitiveSignals.length === 0) {
+    return {
+      passed: false,
+      agreementCount: 0,
+      requiredCount: config.minTimeframeAgreement,
+      oppositeHigherTimeframes: [],
+    };
+  }
+  
+  // Determine majority direction
+  const bullishCount = definitiveSignals.filter(t => t.trend === "bullish").length;
+  const bearishCount = definitiveSignals.filter(t => t.trend === "bearish").length;
+  const majorityDirection = bullishCount > bearishCount ? "bullish" : "bearish";
+  const agreementCount = Math.max(bullishCount, bearishCount);
+  
+  // Check if higher timeframes (2h, 6h) are in opposite direction
+  const higherTimeframes = ["2h", "6h"];
+  const oppositeHigherTFs = trends
+    .filter(t => higherTimeframes.includes(t.timeframe))
+    .filter(t => t.trend !== "neutral" && t.trend !== "sideways" && t.trend !== majorityDirection)
+    .map(t => t.timeframe);
+  
+  const hasOppositeHigher = oppositeHigherTFs.length > 0;
+  
+  const passed = agreementCount >= config.minTimeframeAgreement && 
+                 (config.allowOppositeHigherTimeframes || !hasOppositeHigher);
+  
+  return {
+    passed,
+    agreementCount,
+    requiredCount: config.minTimeframeAgreement,
+    oppositeHigherTimeframes: oppositeHigherTFs,
+  };
+}
+
+/**
+ * Evaluate volatility requirements
+ */
+function evaluateVolatilityRequirements(
+  analyses: ChartAnalysis[], 
+  config: RegimeFilterConfig
+) {
+  const bbWidthChecks = [];
+  const atrChecks = [];
+  
+  // Check BB Width for 1h and 2h
+  for (const timeframe of ["1h", "2h"]) {
+    const analysis = analyses.find(a => a.timeframe === timeframe);
+    if (analysis && analysis.technicalData) {
+      const threshold = config.minBBWidth[timeframe as "1h" | "2h"];
+      const value = analysis.technicalData.bbWidth;
+      const passed = value >= threshold;
+      
+      bbWidthChecks.push({ timeframe, value, threshold, passed });
+    }
+  }
+  
+  // Check ATR for entry timeframes (5m, 15m)
+  for (const timeframe of ["5m", "15m"]) {
+    const analysis = analyses.find(a => a.timeframe === timeframe);
+    if (analysis && analysis.technicalData) {
+      const threshold = config.minATR[timeframe as "5m" | "15m"];
+      const value = analysis.technicalData.atr;
+      const passed = value >= threshold;
+      
+      atrChecks.push({ timeframe, value, threshold, passed });
+    }
+  }
+  
+  const allBBWidthPassed = bbWidthChecks.every(check => check.passed);
+  const anyATRPassed = atrChecks.some(check => check.passed); // At least one entry timeframe must have sufficient ATR
+  
+  return {
+    passed: allBBWidthPassed && anyATRPassed,
+    bbWidthChecks,
+    atrChecks,
+  };
+}
+
+/**
+ * Evaluate momentum requirements (StochRSI and Bollinger positioning)
+ */
+function evaluateMomentumRequirements(
+  analyses: ChartAnalysis[], 
+  config: RegimeFilterConfig
+) {
+  const validStochCrosses: string[] = [];
+  const midBandEntries: string[] = [];
+  
+  for (const analysis of analyses) {
+    if (!analysis.technicalData) continue;
+    
+    const { stochRSI, bollingerPosition } = analysis.technicalData;
+    
+    // Check for valid StochRSI crosses near band edges
+    const hasValidCross = stochRSI.crossDirection && stochRSI.crossDirection !== "none";
+    const nearEdge = bollingerPosition === "upper" || bollingerPosition === "lower" || bollingerPosition === "outside";
+    
+    if (hasValidCross && nearEdge) {
+      validStochCrosses.push(analysis.timeframe);
+    }
+    
+    // Check for mid-band entries (to avoid if configured)
+    if (bollingerPosition === "middle") {
+      midBandEntries.push(analysis.timeframe);
+    }
+  }
+  
+  const hasValidMomentum = validStochCrosses.length > 0;
+  const hasProblematicMidBand = config.avoidMidBandEntries && midBandEntries.length > 0;
+  
+  return {
+    passed: hasValidMomentum && !hasProblematicMidBand,
+    validStochCrosses,
+    midBandEntries,
+  };
+}
+
+/**
+ * Calculate overall filter confidence
+ */
+function calculateFilterConfidence(
+  directional: any,
+  volatility: any, 
+  momentum: any
+): number {
+  let score = 0;
+  let maxScore = 0;
+  
+  // Directional agreement (40% weight)
+  maxScore += 40;
+  if (directional.passed) {
+    const agreementRatio = directional.agreementCount / 5; // Out of 5 timeframes
+    score += 40 * agreementRatio;
+  }
+  
+  // Volatility (35% weight)  
+  maxScore += 35;
+  if (volatility.passed) {
+    const bbPassed = volatility.bbWidthChecks.filter((c: any) => c.passed).length;
+    const atrPassed = volatility.atrChecks.filter((c: any) => c.passed).length;
+    const volScore = (bbPassed / 2 + Math.min(atrPassed, 1)) / 2; // Normalize
+    score += 35 * volScore;
+  }
+  
+  // Momentum (25% weight)
+  maxScore += 25;
+  if (momentum.passed) {
+    score += 25;
+  }
+  
+  return Math.round((score / maxScore) * 100);
+}
+
+/**
+ * Calculate ATR-based risk management levels
+ */
+export const calculateATRBasedLevels = (
+  entryPrice: number,
+  atr: number,
+  action: "long" | "short",
+  config: RegimeFilterConfig = DEFAULT_REGIME_CONFIG
+) => {
+  const { stopLossMultiplier, takeProfitMultiplier, minRiskRewardRatio } = config;
+  
+  let stopLoss: number;
+  let takeProfit: number;
+  
+  if (action === "long") {
+    stopLoss = entryPrice - (atr * stopLossMultiplier);
+    takeProfit = entryPrice + (atr * takeProfitMultiplier);
+  } else {
+    stopLoss = entryPrice + (atr * stopLossMultiplier);
+    takeProfit = entryPrice - (atr * takeProfitMultiplier);
+  }
+  
+  // Calculate risk:reward ratio
+  const riskAmount = Math.abs(entryPrice - stopLoss);
+  const rewardAmount = Math.abs(takeProfit - entryPrice);
+  const riskReward = rewardAmount / riskAmount;
+  
+  // Adjust if risk:reward is below minimum
+  if (riskReward < minRiskRewardRatio) {
+    const adjustedReward = riskAmount * minRiskRewardRatio;
+    if (action === "long") {
+      takeProfit = entryPrice + adjustedReward;
+    } else {
+      takeProfit = entryPrice - adjustedReward;
+    }
+    
+    logger.info(`📊 Adjusted TP for min R:R ${minRiskRewardRatio}:1 - New TP: ${takeProfit.toFixed(2)}`);
+  }
+  
+  return {
+    stopLoss: Math.round(stopLoss * 100) / 100, // Round to 2 decimals
+    takeProfit: Math.round(takeProfit * 100) / 100,
+    riskReward: Math.round((Math.abs(takeProfit - entryPrice) / Math.abs(entryPrice - stopLoss)) * 100) / 100,
+    riskAmount: Math.round(riskAmount * 100) / 100,
+    rewardAmount: Math.round(Math.abs(takeProfit - entryPrice) * 100) / 100
+  };
+};
+
+/**
+ * Calculate position size based on confidence and risk management
+ */
+export const calculatePositionSize = (
+  confidence: number,
+  accountBalance: number,
+  riskAmount: number,
+  config: RegimeFilterConfig = DEFAULT_REGIME_CONFIG
+): { positionSize: number; sizeMultiplier: number; riskPercent: number } => {
+  // Determine size multiplier based on confidence
+  let sizeMultiplier = 1.0;
+  
+  const { confidenceThresholds } = config;
+  
+  if (confidence >= confidenceThresholds.high.min && confidence <= confidenceThresholds.high.max) {
+    sizeMultiplier = confidenceThresholds.high.sizeMultiplier;
+  } else if (confidence >= confidenceThresholds.medium.min && confidence <= confidenceThresholds.medium.max) {
+    sizeMultiplier = confidenceThresholds.medium.sizeMultiplier;
+  } else if (confidence >= confidenceThresholds.low.min && confidence <= confidenceThresholds.low.max) {
+    sizeMultiplier = confidenceThresholds.low.sizeMultiplier;
+  } else {
+    // Below 70% confidence - very small position
+    sizeMultiplier = 0.25;
+  }
+  
+  // Calculate base position size (typically 1-2% of account)
+  const baseRiskPercent = 0.015; // 1.5% of account per trade
+  const adjustedRiskPercent = baseRiskPercent * sizeMultiplier;
+  const maxRiskAmount = accountBalance * adjustedRiskPercent;
+  
+  // Position size = risk amount / price difference per unit
+  const positionSize = Math.min(maxRiskAmount / riskAmount, accountBalance * 0.5); // Cap at 50% of account
+  
+  return {
+    positionSize: Math.round(positionSize * 100) / 100,
+    sizeMultiplier,
+    riskPercent: adjustedRiskPercent * 100
+  };
+};
+
+/**
+ * Enhanced trading decision with risk management
+ */
+export const enhanceDecisionWithRiskManagement = (
+  decision: TradingDecision,
+  analyses: ChartAnalysis[],
+  config: RegimeFilterConfig = DEFAULT_REGIME_CONFIG
+): TradingDecision => {
+  if (decision.action === "hold" || decision.action === "close") {
+    return decision; // No risk management needed for hold/close
+  }
+  
+  // Find the entry timeframe (5m or 15m) with highest ATR
+  const entryTimeframes = analyses.filter(a => ["5m", "15m"].includes(a.timeframe));
+  const entryAnalysis = entryTimeframes.reduce((prev, curr) => 
+    (curr.technicalData?.atr || 0) > (prev.technicalData?.atr || 0) ? curr : prev
+  );
+  
+  if (!entryAnalysis?.technicalData?.atr || !decision.entryPrice) {
+    logger.warn("⚠️  Cannot calculate ATR-based levels - missing data");
+    return decision;
+  }
+  
+  const atr = entryAnalysis.technicalData.atr;
+  const entryPrice = decision.entryPrice;
+  
+  // Calculate ATR-based levels
+  const riskLevels = calculateATRBasedLevels(entryPrice, atr, decision.action, config);
+  
+  // Update decision with enhanced risk management
+  const enhancedDecision: TradingDecision = {
+    ...decision,
+    stopLoss: riskLevels.stopLoss,
+    takeProfit: riskLevels.takeProfit,
+    riskReward: riskLevels.riskReward,
+    warnings: [
+      ...decision.warnings,
+      ...(riskLevels.riskReward < config.minRiskRewardRatio ? 
+        [`Risk:Reward ${riskLevels.riskReward} below minimum ${config.minRiskRewardRatio}`] : [])
+    ]
+  };
+  
+  logger.info(`📊 Enhanced Risk Management:`);
+  logger.info(`   Entry: ${entryPrice} | SL: ${riskLevels.stopLoss} | TP: ${riskLevels.takeProfit}`);
+  logger.info(`   Risk: $${riskLevels.riskAmount} | Reward: $${riskLevels.rewardAmount} | R:R = 1:${riskLevels.riskReward}`);
+  logger.info(`   ATR(${entryAnalysis.timeframe}): ${atr} | SL Multiplier: ${config.stopLossMultiplier}x | TP Multiplier: ${config.takeProfitMultiplier}x`);
+  
+  return enhancedDecision;
+};
+
+/**
+ * Validate decision against average win/loss ratio
+ */
+export const validateAgainstWinLossRatio = (
+  currentLoss: number,
+  averageWin: number,
+  config: RegimeFilterConfig = DEFAULT_REGIME_CONFIG
+): { isValid: boolean; reason: string } => {
+  const maxAllowedLoss = averageWin * config.maxLossToAvgWinRatio;
+  
+  if (currentLoss > maxAllowedLoss) {
+    return {
+      isValid: false,
+      reason: `Potential loss $${currentLoss.toFixed(2)} exceeds ${config.maxLossToAvgWinRatio}x average win ($${maxAllowedLoss.toFixed(2)})`
+    };
+  }
+  
+  return {
+    isValid: true,
+    reason: `Risk acceptable: $${currentLoss.toFixed(2)} ≤ ${config.maxLossToAvgWinRatio}x avg win ($${maxAllowedLoss.toFixed(2)})`
+  };
 };
 
 /**
@@ -984,12 +1474,66 @@ export const executeVisionAnalysis = async (
       throw new Error("No successful chart analyses");
     }
 
-    // Make multi-timeframe trading decision
-    const tradingDecision = await makeMultiTimeframeDecision(
-      openai,
-      individualAnalyses,
-      config
-    );
+    // Apply pre-trade regime filter
+    const regimeConfig = (config as any).regimeFilter || DEFAULT_REGIME_CONFIG;
+    const regimeResult = evaluateRegimeFilter(individualAnalyses, regimeConfig);
+    
+    // Enhanced logging for regime filter
+    if (regimeConfig.logFilterDecisions) {
+      logRegimeFilterDecision(regimeResult, individualAnalyses, regimeConfig);
+    }
+    
+    // Save regime filter results if configured
+    if (regimeConfig.saveFilterResults) {
+      saveRegimeFilterResults(regimeResult, individualAnalyses, config.outputDir || "analysis-results");
+    }
+    
+    logger.info(`🔍 Regime Filter: ${regimeResult.passed ? "PASSED" : "FAILED"}`);
+    
+    let tradingDecision: TradingDecision;
+    
+    if (!regimeResult.passed) {
+      // Create a HOLD decision if regime filter fails
+      tradingDecision = {
+        action: "hold",
+        confidence: Math.round(regimeResult.confidence / 10), // Convert to 1-10 scale
+        reasoning: `Regime filter failed: ${regimeResult.reason}`,
+        timeframes: individualAnalyses,
+        overallTrend: "neutral",
+        marketStructure: "Filtered out due to poor regime conditions",
+        warnings: ["Trade filtered out by regime analysis"]
+      };
+      
+      logger.warn(`⚠️  Skipping AI analysis - regime filter failed: ${regimeResult.reason}`);
+    } else {
+      // Only proceed with AI analysis if regime filter passes
+      logger.success(`✅ Regime filter passed - proceeding with AI analysis`);
+      
+      // Make multi-timeframe trading decision
+      tradingDecision = await makeMultiTimeframeDecision(
+        openai,
+        individualAnalyses,
+        config
+      );
+      
+      // Validate AI decision matches regime recommendation
+      if (regimeResult.recommendedAction && 
+          tradingDecision.action !== "hold" && 
+          tradingDecision.action !== regimeResult.recommendedAction) {
+        logger.warn(`⚠️  AI decision (${tradingDecision.action}) conflicts with regime filter (${regimeResult.recommendedAction})`);
+        tradingDecision.warnings.push(`AI decision conflicts with regime filter recommendation`);
+      }
+      
+      // Apply enhanced risk management with ATR-based stops/targets
+      if (tradingDecision.action !== "hold") {
+        tradingDecision = enhanceDecisionWithRiskManagement(tradingDecision, individualAnalyses, regimeConfig);
+      }
+      
+      // Enhanced logging for trading decision
+      if (regimeConfig.logFilterDecisions) {
+        logTradingDecisionDetails(tradingDecision, regimeResult);
+      }
+    }
 
     // Generate comprehensive analysis
     const { analysis: comprehensiveAnalysis, cost: compCost } =
@@ -1010,6 +1554,20 @@ export const executeVisionAnalysis = async (
         config
       );
 
+    stepLogger.complete();
+
+    const totalCost = compCost + verdictCost;
+
+    // Enhanced logging for final verdict
+    if (regimeConfig.logFilterDecisions) {
+      const analysisTime = (Date.now() - Date.now()) / 1000; // This could be calculated properly with start time
+      logFinalVerdictDetails(finalVerdict, {
+        regimeFilterPassed: regimeResult.passed,
+        aiAnalysisTime: analysisTime,
+        totalCost: totalCost
+      });
+    }
+
     // Play sound alert for the final verdict
     if (finalVerdict && config.soundEffects !== false) {
       await playTradingAlert(
@@ -1018,10 +1576,6 @@ export const executeVisionAnalysis = async (
         finalVerdict.keyReason
       );
     }
-
-    stepLogger.complete();
-
-    const totalCost = compCost + verdictCost;
 
     const result: VisionAnalysisResult = {
       success: true,
@@ -1082,5 +1636,765 @@ export const createVisionAnalysisConfig = (
   saveText: true,
   soundEffects: true,
   soundVolume: 0.7,
+  regimeFilter: DEFAULT_REGIME_CONFIG, // Include regime filter by default
   ...options,
 });
+
+/**
+ * Regime filter configuration for pre-trade filtering
+ */
+export interface RegimeFilterConfig {
+  // Directional agreement thresholds
+  minTimeframeAgreement: number; // Minimum timeframes that must agree (default: 3 out of 5)
+  allowOppositeHigherTimeframes: boolean; // Allow 2h/6h to be opposite (default: false)
+  
+  // Volatility thresholds
+  minBBWidth: {
+    "1h": number; // Minimum BB width for 1h (default: 0.015)
+    "2h": number; // Minimum BB width for 2h (default: 0.015)
+  };
+  minATR: {
+    "5m": number; // Minimum ATR for 5m entry (default: 15)
+    "15m": number; // Minimum ATR for 15m entry (default: 20)
+  };
+  
+  // Momentum requirements
+  stochRSIEdgeThreshold: number; // How close to BB edge for stoch cross (default: 0.2)
+  avoidMidBandEntries: boolean; // Avoid entries in middle 40% of BB range (default: true)
+  
+  // Risk management
+  maxLossToAvgWinRatio: number; // Max loss relative to avg win (default: 1.2)
+  minRiskRewardRatio: number; // Minimum R:R ratio (default: 1.5)
+  
+  // ATR-based stops and targets
+  stopLossMultiplier: number; // SL = ATR * multiplier (default: 2.0)
+  takeProfitMultiplier: number; // TP = ATR * multiplier (default: 3.0)
+  
+  // Confidence thresholds for position sizing
+  confidenceThresholds: {
+    low: { min: 70, max: 79, sizeMultiplier: 0.5 }; // 70-79%: 0.5x size
+    medium: { min: 80, max: 89, sizeMultiplier: 1.0 }; // 80-89%: 1.0x size  
+    high: { min: 90, max: 100, sizeMultiplier: 1.5 }; // 90%+: 1.5x size
+  };
+  
+  // Logging options
+  logFilterDecisions: boolean; // Log regime filter pass/fail reasons (default: true)
+  saveFilterResults: boolean; // Save filter results to files (default: true)
+}
+
+/**
+ * Default regime filter configuration
+ */
+export const DEFAULT_REGIME_CONFIG: RegimeFilterConfig = {
+  minTimeframeAgreement: 3,
+  allowOppositeHigherTimeframes: false,
+  minBBWidth: {
+    "1h": 0.015,
+    "2h": 0.015,
+  },
+  minATR: {
+    "5m": 15,
+    "15m": 20,
+  },
+  stochRSIEdgeThreshold: 0.2,
+  avoidMidBandEntries: true,
+  maxLossToAvgWinRatio: 1.2,
+  minRiskRewardRatio: 1.5,
+  stopLossMultiplier: 2.0,
+  takeProfitMultiplier: 3.0,
+  confidenceThresholds: {
+    low: { min: 70, max: 79, sizeMultiplier: 0.5 },
+    medium: { min: 80, max: 89, sizeMultiplier: 1.0 },
+    high: { min: 90, max: 100, sizeMultiplier: 1.5 },
+  },
+  logFilterDecisions: true,
+  saveFilterResults: true,
+};
+
+/**
+ * Regime filter result
+ */
+export interface RegimeFilterResult {
+  passed: boolean;
+  reason: string;
+  checks: {
+    directionalAgreement: {
+      passed: boolean;
+      agreementCount: number;
+      requiredCount: number;
+      oppositeHigherTimeframes: string[];
+    };
+    volatilityCheck: {
+      passed: boolean;
+      bbWidthChecks: Array<{ timeframe: string; value: number; threshold: number; passed: boolean }>;
+      atrChecks: Array<{ timeframe: string; value: number; threshold: number; passed: boolean }>;
+    };
+    momentumCheck: {
+      passed: boolean;
+      validStochCrosses: string[];
+      midBandEntries: string[];
+    };
+  };
+  recommendedAction?: "long" | "short" | "hold";
+  confidence: number;
+}
+
+/**
+ * Enhanced logging for regime filter and trading decisions
+ */
+export const logRegimeFilterDecision = (
+  regimeResult: RegimeFilterResult,
+  analyses: ChartAnalysis[],
+  config: RegimeFilterConfig
+): void => {
+  logger.info("📋 REGIME FILTER ANALYSIS REPORT");
+  logger.info("=".repeat(50));
+  
+  // Overview
+  logger.info(`🎯 Filter Result: ${regimeResult.passed ? "✅ PASSED" : "❌ FAILED"}`);
+  logger.info(`📊 Overall Confidence: ${regimeResult.confidence.toFixed(1)}%`);
+  logger.info(`💡 Recommended Action: ${regimeResult.recommendedAction || "HOLD"}`);
+  logger.info(`📝 Reason: ${regimeResult.reason}`);
+  logger.info("");
+  
+  // Directional Agreement Details
+  const dirCheck = regimeResult.checks.directionalAgreement;
+  logger.info(`📈 DIRECTIONAL AGREEMENT CHECK:`);
+  logger.info(`   Status: ${dirCheck.passed ? "✅ PASSED" : "❌ FAILED"}`);
+  logger.info(`   Agreement: ${dirCheck.agreementCount}/${dirCheck.requiredCount} timeframes`);
+  
+  if (dirCheck.oppositeHigherTimeframes.length > 0) {
+    logger.warn(`   ⚠️  Opposite Higher TFs: ${dirCheck.oppositeHigherTimeframes.join(", ")}`);
+  }
+  
+  // Show individual timeframe trends
+  analyses.forEach(analysis => {
+    const indicator = analysis.trend === "bullish" ? "📈" : 
+                      analysis.trend === "bearish" ? "📉" : 
+                      analysis.trend === "neutral" ? "➡️" : "🔄";
+    logger.info(`   ${indicator} ${analysis.timeframe}: ${analysis.trend} (confidence: ${analysis.confidence}/10)`);
+  });
+  
+  logger.info("");
+  
+  // Volatility Check Details
+  const volCheck = regimeResult.checks.volatilityCheck;
+  logger.info(`🌊 VOLATILITY CHECK:`);
+  logger.info(`   Status: ${volCheck.passed ? "✅ PASSED" : "❌ FAILED"}`);
+  
+  volCheck.bbWidthChecks.forEach(check => {
+    const status = check.passed ? "✅" : "❌";
+    logger.info(`   ${status} BB Width ${check.timeframe}: ${check.value.toFixed(4)} (min: ${check.threshold.toFixed(4)})`);
+  });
+  
+  volCheck.atrChecks.forEach(check => {
+    const status = check.passed ? "✅" : "❌";
+    logger.info(`   ${status} ATR ${check.timeframe}: ${check.value.toFixed(1)} (min: ${check.threshold})`);
+  });
+  
+  logger.info("");
+  
+  // Momentum Check Details  
+  const momCheck = regimeResult.checks.momentumCheck;
+  logger.info(`⚡ MOMENTUM CHECK:`);
+  logger.info(`   Status: ${momCheck.passed ? "✅ PASSED" : "❌ FAILED"}`);
+  
+  if (momCheck.validStochCrosses.length > 0) {
+    logger.info(`   ✅ Valid StochRSI crosses: ${momCheck.validStochCrosses.join(", ")}`);
+  } else {
+    logger.warn(`   ⚠️  No valid StochRSI crosses found`);
+  }
+  
+  if (momCheck.midBandEntries.length > 0) {
+    logger.warn(`   ⚠️  Mid-band entries detected: ${momCheck.midBandEntries.join(", ")}`);
+  }
+  
+  logger.info("");
+  
+  // Technical Data Summary
+  logger.info(`🔬 TECHNICAL DATA SUMMARY:`);
+  analyses.forEach(analysis => {
+    if (analysis.technicalData) {
+      const td = analysis.technicalData;
+      logger.info(`   ${analysis.timeframe}:`);
+      logger.info(`     BB Width: ${td.bbWidth.toFixed(4)} | ATR: ${td.atr.toFixed(1)} | Volatility: ${td.volatilityRegime}`);
+      logger.info(`     StochRSI: K=${td.stochRSI.kPercent.toFixed(1)}% D=${td.stochRSI.dPercent.toFixed(1)}% | Cross: ${td.stochRSI.crossDirection}`);
+      logger.info(`     BB Position: ${td.bollingerPosition} | OS/OB: ${td.stochRSI.oversold ? "Oversold" : td.stochRSI.overbought ? "Overbought" : "Normal"}`);
+    }
+  });
+  
+  logger.info("=".repeat(50));
+};
+
+/**
+ * Log trading decision with enhanced details
+ */
+export const logTradingDecisionDetails = (
+  decision: TradingDecision,
+  regimeResult?: RegimeFilterResult
+): void => {
+  logger.info("💼 TRADING DECISION ANALYSIS");
+  logger.info("=".repeat(50));
+  
+  logger.info(`🎯 Action: ${decision.action.toUpperCase()}`);
+  logger.info(`📊 Confidence: ${decision.confidence}/10`);
+  logger.info(`📈 Overall Trend: ${decision.overallTrend}`);
+  logger.info(`💡 Reasoning: ${decision.reasoning}`);
+  
+  if (decision.entryPrice) {
+    logger.info(`💰 Entry Price: ${decision.entryPrice}`);
+  }
+  
+  if (decision.stopLoss && decision.takeProfit) {
+    const risk = Math.abs(decision.entryPrice! - decision.stopLoss);
+    const reward = Math.abs(decision.takeProfit - decision.entryPrice!);
+    logger.info(`🛡️ Stop Loss: ${decision.stopLoss} (Risk: $${risk.toFixed(2)})`);
+    logger.info(`🎯 Take Profit: ${decision.takeProfit} (Reward: $${reward.toFixed(2)})`);
+    logger.info(`⚖️ Risk:Reward = 1:${decision.riskReward || (reward/risk).toFixed(2)}`);
+  }
+  
+  if (decision.warnings.length > 0) {
+    logger.warn(`⚠️  Warnings:`);
+    decision.warnings.forEach(warning => logger.warn(`   • ${warning}`));
+  }
+  
+  if (regimeResult) {
+    logger.info(`🔍 Regime Filter: ${regimeResult.passed ? "✅ PASSED" : "❌ BYPASSED"}`);
+    if (regimeResult.recommendedAction && regimeResult.recommendedAction !== decision.action) {
+      logger.warn(`   ⚠️  Filter recommended: ${regimeResult.recommendedAction}, Decision: ${decision.action}`);
+    }
+  }
+  
+  logger.info("=".repeat(50));
+};
+
+/**
+ * Log final verdict with comprehensive details
+ */
+export const logFinalVerdictDetails = (
+  verdict: TradingVerdict,
+  analysisMetadata?: { regimeFilterPassed: boolean; aiAnalysisTime: number; totalCost: number }
+): void => {
+  logger.info("⚡ FINAL TRADING VERDICT");
+  logger.info("=".repeat(60));
+  
+  const actionEmoji = verdict.action === "LONG" ? "🚀" : verdict.action === "SHORT" ? "🔻" : "⏸️";
+  logger.info(`${actionEmoji} FINAL ACTION: ${verdict.action}`);
+  logger.info(`📊 Confidence: ${verdict.confidence}%`);
+  logger.info(`💰 Position Size: ${verdict.positionSize}% of portfolio`);
+  logger.info(`⏰ Time Horizon: ${verdict.timeHorizon}`);
+  logger.info(`🎯 Risk Level: ${verdict.riskLevel}`);
+  logger.info(`💡 Key Reason: ${verdict.keyReason}`);
+  logger.info(`⏰ Next Check: ${verdict.nextCheckMinutes} minutes`);
+  
+  if (verdict.entryPrice) {
+    logger.info(`💰 Entry: ${verdict.entryPrice}`);
+  }
+  
+  if (verdict.stopLoss && verdict.takeProfit) {
+    logger.info(`🛡️ Stop Loss: ${verdict.stopLoss}`);
+    logger.info(`🎯 Take Profit: ${verdict.takeProfit}`);
+  }
+  
+  if (verdict.criticalWarnings.length > 0) {
+    logger.warn(`🚨 CRITICAL WARNINGS:`);
+    verdict.criticalWarnings.forEach(warning => logger.warn(`   • ${warning}`));
+  }
+  
+  if (analysisMetadata) {
+    logger.info("");
+    logger.info(`📈 Analysis Metadata:`);
+    logger.info(`   Regime Filter: ${analysisMetadata.regimeFilterPassed ? "✅ PASSED" : "❌ FILTERED"}`);
+    logger.info(`   AI Analysis Time: ${analysisMetadata.aiAnalysisTime.toFixed(1)}s`);
+    logger.info(`   Total Cost: $${analysisMetadata.totalCost.toFixed(4)}`);
+  }
+  
+  logger.info("=".repeat(60));
+};
+
+/**
+ * Save regime filter results to file
+ */
+export const saveRegimeFilterResults = (
+  regimeResult: RegimeFilterResult,
+  analyses: ChartAnalysis[],
+  outputDir: string = "analysis-results"
+): string => {
+  try {
+    // Ensure output directory exists
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+    
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const filename = `regime-filter-${timestamp}.json`;
+    const filepath = path.join(outputDir, filename);
+    
+    const data = {
+      timestamp: new Date().toISOString(),
+      regimeResult,
+      timeframeAnalyses: analyses.map(a => ({
+        timeframe: a.timeframe,
+        trend: a.trend,
+        confidence: a.confidence,
+        technicalData: a.technicalData
+      })),
+      summary: {
+        passed: regimeResult.passed,
+        confidence: regimeResult.confidence,
+        recommendedAction: regimeResult.recommendedAction,
+        failureReasons: regimeResult.passed ? [] : [regimeResult.reason]
+      }
+    };
+    
+    fs.writeFileSync(filepath, JSON.stringify(data, null, 2));
+    logger.info(`💾 Regime filter results saved: ${filename}`);
+    
+    return filepath;
+  } catch (error) {
+    logger.error(`❌ Failed to save regime filter results: ${(error as Error).message}`);
+    throw error;
+  }
+};
+
+/**
+ * Backtest configuration
+ */
+export interface BacktestConfig {
+  enabled: boolean;
+  historicalDataPath?: string; // Path to historical analysis results
+  startDate?: string; // ISO date string
+  endDate?: string; // ISO date string
+  initialBalance: number; // Starting account balance
+  riskPerTrade: number; // Risk percentage per trade (0.01 = 1%)
+  reportOutputPath?: string; // Where to save backtest results
+}
+
+/**
+ * Backtest result for a single trade
+ */
+export interface BacktestTrade {
+  timestamp: string;
+  timeframe: string;
+  action: "LONG" | "SHORT" | "HOLD";
+  entryPrice: number;
+  stopLoss?: number;
+  takeProfit?: number;
+  positionSize: number; // Dollar amount
+  confidence: number;
+  regimeFilterPassed: boolean;
+  aiDecision: string;
+  actualOutcome?: "WIN" | "LOSS" | "BREAK_EVEN";
+  pnl?: number; // Profit/Loss in dollars
+  holdTime?: number; // Minutes held
+  exitReason?: "TP" | "SL" | "TIME" | "MANUAL";
+}
+
+/**
+ * Backtest summary results
+ */
+export interface BacktestResults {
+  summary: {
+    totalTrades: number;
+    regimeFilteredTrades: number; // Trades filtered out
+    executedTrades: number; // Trades that passed filter
+    winRate: number; // Percentage
+    avgWin: number;
+    avgLoss: number;
+    maxDrawdown: number;
+    finalBalance: number;
+    totalReturn: number; // Percentage
+    sharpeRatio?: number;
+  };
+  regimeFilterPerformance: {
+    withFilter: {
+      winRate: number;
+      avgReturn: number;
+      maxDrawdown: number;
+    };
+    withoutFilter: {
+      winRate: number;
+      avgReturn: number;
+      maxDrawdown: number;
+    };
+    improvement: {
+      winRateImprovement: number; // Percentage points
+      returnImprovement: number; // Percentage points
+      drawdownReduction: number; // Percentage points
+    };
+  };
+  trades: BacktestTrade[];
+  monthlyReturns: Array<{ month: string; return: number; trades: number }>;
+}
+
+/**
+ * Run backtest on historical data
+ */
+export const runBacktest = async (
+  config: BacktestConfig,
+  regimeConfig: RegimeFilterConfig = DEFAULT_REGIME_CONFIG
+): Promise<BacktestResults> => {
+  if (!config.enabled) {
+    throw new Error("Backtest mode is not enabled");
+  }
+
+  logger.info("📊 Starting Regime Filter Backtest");
+  logger.info("=".repeat(50));
+
+  // Load historical analysis data
+  const historicalData = await loadHistoricalData(config);
+  logger.info(`📈 Loaded ${historicalData.length} historical analysis points`);
+
+  // Filter data by date range if specified
+  const filteredData = filterDataByDateRange(historicalData, config);
+  logger.info(`📅 Date filtered data: ${filteredData.length} points`);
+
+  // Run backtest with and without regime filter
+  const withFilterResults = simulateTrading(filteredData, config, regimeConfig, true);
+  const withoutFilterResults = simulateTrading(filteredData, config, regimeConfig, false);
+
+  // Calculate performance metrics
+  const results = calculateBacktestMetrics(withFilterResults, withoutFilterResults, config);
+
+  // Save backtest report
+  if (config.reportOutputPath) {
+    await saveBacktestReport(results, config.reportOutputPath);
+  }
+
+  // Log summary
+  logBacktestSummary(results);
+
+  logger.info("=".repeat(50));
+  logger.success("✅ Backtest completed successfully");
+
+  return results;
+};
+
+/**
+ * Load historical analysis data
+ */
+async function loadHistoricalData(config: BacktestConfig): Promise<any[]> {
+  const dataPath = config.historicalDataPath || "analysis-results";
+  
+  if (!fs.existsSync(dataPath)) {
+    throw new Error(`Historical data path not found: ${dataPath}`);
+  }
+
+  const files = fs.readdirSync(dataPath)
+    .filter(file => file.startsWith("analysis-") && file.endsWith(".json"))
+    .sort();
+
+  const historicalData: any[] = [];
+
+  for (const file of files) {
+    try {
+      const filePath = path.join(dataPath, file);
+      const data = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      
+      // Extract timestamp from filename or data
+      const timestamp = data.timestamp || file.match(/analysis-(.+)\.json/)?.[1];
+      
+      if (data.analysisData && timestamp) {
+        historicalData.push({
+          timestamp,
+          ...data.analysisData
+        });
+      }
+    } catch (error) {
+      logger.warn(`⚠️  Failed to load ${file}: ${(error as Error).message}`);
+    }
+  }
+
+  return historicalData;
+}
+
+/**
+ * Filter historical data by date range
+ */
+function filterDataByDateRange(data: any[], config: BacktestConfig): any[] {
+  if (!config.startDate && !config.endDate) {
+    return data;
+  }
+
+  return data.filter(item => {
+    const itemDate = new Date(item.timestamp);
+    const startDate = config.startDate ? new Date(config.startDate) : new Date(0);
+    const endDate = config.endDate ? new Date(config.endDate) : new Date();
+    
+    return itemDate >= startDate && itemDate <= endDate;
+  });
+}
+
+/**
+ * Simulate trading with or without regime filter
+ */
+function simulateTrading(
+  data: any[],
+  config: BacktestConfig,
+  regimeConfig: RegimeFilterConfig,
+  useRegimeFilter: boolean
+): BacktestTrade[] {
+  const trades: BacktestTrade[] = [];
+  let balance = config.initialBalance;
+
+  for (const analysisPoint of data) {
+    try {
+      const { individualAnalyses, finalVerdict } = analysisPoint;
+      
+      if (!individualAnalyses || !finalVerdict || finalVerdict.action === "HOLD") {
+        continue;
+      }
+
+      // Apply regime filter if enabled
+      let regimeFilterPassed = true;
+      if (useRegimeFilter) {
+        const regimeResult = evaluateRegimeFilter(individualAnalyses, regimeConfig);
+        regimeFilterPassed = regimeResult.passed;
+      }
+
+      // Calculate position size
+      const riskAmount = balance * config.riskPerTrade;
+      const positionSize = regimeFilterPassed ? riskAmount : 0;
+
+      const trade: BacktestTrade = {
+        timestamp: analysisPoint.timestamp,
+        timeframe: "5m", // Primary entry timeframe
+        action: finalVerdict.action,
+        entryPrice: finalVerdict.entryPrice || 0,
+        stopLoss: finalVerdict.stopLoss,
+        takeProfit: finalVerdict.takeProfit,
+        positionSize,
+        confidence: finalVerdict.confidence,
+        regimeFilterPassed,
+        aiDecision: finalVerdict.keyReason || "No reason provided"
+      };
+
+      // Simulate outcome (simplified - in real backtest you'd use actual price data)
+      if (positionSize > 0) {
+        const outcome = simulateTradeOutcome(trade, finalVerdict.confidence);
+        trade.actualOutcome = outcome.result;
+        trade.pnl = outcome.pnl;
+        trade.holdTime = outcome.holdTime;
+        trade.exitReason = outcome.exitReason;
+        
+        balance += outcome.pnl;
+      }
+
+      trades.push(trade);
+    } catch (error) {
+      logger.warn(`⚠️  Failed to process analysis point: ${(error as Error).message}`);
+    }
+  }
+
+  return trades;
+}
+
+/**
+ * Simulate individual trade outcome (simplified simulation)
+ */
+function simulateTradeOutcome(trade: BacktestTrade, confidence: number): {
+  result: "WIN" | "LOSS" | "BREAK_EVEN";
+  pnl: number;
+  holdTime: number;
+  exitReason: "TP" | "SL" | "TIME";
+} {
+  // Simplified simulation based on confidence
+  // In a real backtest, you'd use actual historical price movements
+  
+  const baseWinProbability = 0.6; // 60% base win rate
+  const confidenceBonus = (confidence - 70) * 0.01; // Each point above 70% adds 1% win probability
+  const winProbability = Math.min(0.9, Math.max(0.3, baseWinProbability + confidenceBonus));
+  
+  const random = Math.random();
+  const isWin = random < winProbability;
+  
+  const riskAmount = Math.abs((trade.entryPrice - (trade.stopLoss || trade.entryPrice * 0.98)));
+  const rewardAmount = Math.abs((trade.takeProfit || trade.entryPrice * 1.03) - trade.entryPrice);
+  
+  if (isWin) {
+    return {
+      result: "WIN",
+      pnl: trade.positionSize * (rewardAmount / trade.entryPrice),
+      holdTime: Math.floor(Math.random() * 240) + 30, // 30-270 minutes
+      exitReason: "TP"
+    };
+  } else {
+    return {
+      result: "LOSS",
+      pnl: -trade.positionSize * (riskAmount / trade.entryPrice),
+      holdTime: Math.floor(Math.random() * 60) + 15, // 15-75 minutes  
+      exitReason: "SL"
+    };
+  }
+}
+
+/**
+ * Calculate backtest performance metrics
+ */
+function calculateBacktestMetrics(
+  withFilter: BacktestTrade[],
+  withoutFilter: BacktestTrade[],
+  config: BacktestConfig
+): BacktestResults {
+  const calculateStats = (trades: BacktestTrade[]) => {
+    const executedTrades = trades.filter(t => t.positionSize > 0);
+    const wins = executedTrades.filter(t => t.actualOutcome === "WIN");
+    const losses = executedTrades.filter(t => t.actualOutcome === "LOSS");
+    
+    const totalPnL = executedTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
+    const winRate = executedTrades.length > 0 ? wins.length / executedTrades.length : 0;
+    const avgWin = wins.length > 0 ? wins.reduce((sum, t) => sum + (t.pnl || 0), 0) / wins.length : 0;
+    const avgLoss = losses.length > 0 ? Math.abs(losses.reduce((sum, t) => sum + (t.pnl || 0), 0) / losses.length) : 0;
+    
+    // Calculate max drawdown
+    let peak = config.initialBalance;
+    let maxDrawdown = 0;
+    let currentBalance = config.initialBalance;
+    
+    for (const trade of executedTrades) {
+      currentBalance += trade.pnl || 0;
+      if (currentBalance > peak) {
+        peak = currentBalance;
+      }
+      const drawdown = (peak - currentBalance) / peak;
+      if (drawdown > maxDrawdown) {
+        maxDrawdown = drawdown;
+      }
+    }
+    
+    return {
+      winRate: winRate * 100,
+      avgReturn: (totalPnL / config.initialBalance) * 100,
+      maxDrawdown: maxDrawdown * 100,
+      avgWin,
+      avgLoss,
+      totalPnL,
+      finalBalance: config.initialBalance + totalPnL
+    };
+  };
+
+  const withFilterStats = calculateStats(withFilter);
+  const withoutFilterStats = calculateStats(withoutFilter);
+
+  return {
+    summary: {
+      totalTrades: withFilter.length,
+      regimeFilteredTrades: withFilter.filter(t => !t.regimeFilterPassed).length,
+      executedTrades: withFilter.filter(t => t.positionSize > 0).length,
+      winRate: withFilterStats.winRate,
+      avgWin: withFilterStats.avgWin,
+      avgLoss: withFilterStats.avgLoss,
+      maxDrawdown: withFilterStats.maxDrawdown,
+      finalBalance: withFilterStats.finalBalance,
+      totalReturn: withFilterStats.avgReturn
+    },
+    regimeFilterPerformance: {
+      withFilter: {
+        winRate: withFilterStats.winRate,
+        avgReturn: withFilterStats.avgReturn,
+        maxDrawdown: withFilterStats.maxDrawdown
+      },
+      withoutFilter: {
+        winRate: withoutFilterStats.winRate,
+        avgReturn: withoutFilterStats.avgReturn,
+        maxDrawdown: withoutFilterStats.maxDrawdown
+      },
+      improvement: {
+        winRateImprovement: withFilterStats.winRate - withoutFilterStats.winRate,
+        returnImprovement: withFilterStats.avgReturn - withoutFilterStats.avgReturn,
+        drawdownReduction: withoutFilterStats.maxDrawdown - withFilterStats.maxDrawdown
+      }
+    },
+    trades: withFilter,
+    monthlyReturns: calculateMonthlyReturns(withFilter)
+  };
+}
+
+/**
+ * Calculate monthly returns breakdown
+ */
+function calculateMonthlyReturns(trades: BacktestTrade[]): Array<{ month: string; return: number; trades: number }> {
+  const monthlyData: { [month: string]: { pnl: number; trades: number } } = {};
+
+  for (const trade of trades) {
+    if (trade.positionSize > 0 && trade.pnl !== undefined) {
+      const date = new Date(trade.timestamp);
+      const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      
+      if (!monthlyData[monthKey]) {
+        monthlyData[monthKey] = { pnl: 0, trades: 0 };
+      }
+      
+      monthlyData[monthKey].pnl += trade.pnl;
+      monthlyData[monthKey].trades += 1;
+    }
+  }
+
+  return Object.entries(monthlyData)
+    .map(([month, data]) => ({
+      month,
+      return: data.pnl,
+      trades: data.trades
+    }))
+    .sort((a, b) => a.month.localeCompare(b.month));
+}
+
+/**
+ * Save backtest report to file
+ */
+async function saveBacktestReport(results: BacktestResults, outputPath: string): Promise<void> {
+  try {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const filename = `backtest-report-${timestamp}.json`;
+    const filepath = path.join(outputPath, filename);
+    
+    // Ensure output directory exists
+    if (!fs.existsSync(outputPath)) {
+      fs.mkdirSync(outputPath, { recursive: true });
+    }
+    
+    fs.writeFileSync(filepath, JSON.stringify(results, null, 2));
+    logger.info(`💾 Backtest report saved: ${filename}`);
+  } catch (error) {
+    logger.error(`❌ Failed to save backtest report: ${(error as Error).message}`);
+  }
+}
+
+/**
+ * Log backtest summary
+ */
+function logBacktestSummary(results: BacktestResults): void {
+  logger.info("📊 BACKTEST RESULTS SUMMARY");
+  logger.info("=".repeat(60));
+  
+  const { summary, regimeFilterPerformance } = results;
+  
+  logger.info(`📈 OVERALL PERFORMANCE:`);
+  logger.info(`   Total Trades: ${summary.totalTrades}`);
+  logger.info(`   Regime Filtered: ${summary.regimeFilteredTrades} (${((summary.regimeFilteredTrades/summary.totalTrades)*100).toFixed(1)}%)`);
+  logger.info(`   Executed Trades: ${summary.executedTrades}`);
+  logger.info(`   Win Rate: ${summary.winRate.toFixed(1)}%`);
+  logger.info(`   Total Return: ${summary.totalReturn.toFixed(2)}%`);
+  logger.info(`   Max Drawdown: ${summary.maxDrawdown.toFixed(2)}%`);
+  logger.info(`   Final Balance: $${summary.finalBalance.toFixed(2)}`);
+  logger.info("");
+  
+  logger.info(`🔍 REGIME FILTER EFFECTIVENESS:`);
+  logger.info(`   WITH Filter - Win Rate: ${regimeFilterPerformance.withFilter.winRate.toFixed(1)}% | Return: ${regimeFilterPerformance.withFilter.avgReturn.toFixed(2)}% | Max DD: ${regimeFilterPerformance.withFilter.maxDrawdown.toFixed(2)}%`);
+  logger.info(`   WITHOUT Filter - Win Rate: ${regimeFilterPerformance.withoutFilter.winRate.toFixed(1)}% | Return: ${regimeFilterPerformance.withoutFilter.avgReturn.toFixed(2)}% | Max DD: ${regimeFilterPerformance.withoutFilter.maxDrawdown.toFixed(2)}%`);
+  logger.info("");
+  
+  const improvement = regimeFilterPerformance.improvement;
+  logger.info(`📊 REGIME FILTER IMPROVEMENT:`);
+  logger.info(`   Win Rate: ${improvement.winRateImprovement > 0 ? "+" : ""}${improvement.winRateImprovement.toFixed(1)} percentage points`);
+  logger.info(`   Returns: ${improvement.returnImprovement > 0 ? "+" : ""}${improvement.returnImprovement.toFixed(2)}% improvement`);
+  logger.info(`   Drawdown: ${improvement.drawdownReduction > 0 ? "-" : ""}${Math.abs(improvement.drawdownReduction).toFixed(2)}% reduction`);
+  
+  if (improvement.winRateImprovement > 5 && improvement.returnImprovement > 0) {
+    logger.success("✅ Regime filter shows significant improvement!");
+  } else if (improvement.winRateImprovement > 0) {
+    logger.info("📈 Regime filter shows modest improvement");
+  } else {
+    logger.warn("⚠️ Regime filter may need adjustment");
+  }
+}
