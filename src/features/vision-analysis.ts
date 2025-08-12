@@ -3,6 +3,7 @@ import path from "path";
 import OpenAI from "openai";
 import { logger, createStepLogger } from "../utils/logger";
 import { playTradingAlert, TradingAction } from "../utils/sound-effects";
+import { fetchAndAnalyzeCryptoNews, logNewsAnalysis, NewsAnalysis, NewsConfig } from "./news-analysis.js";
 
 /**
  * Vision analysis configuration
@@ -21,6 +22,8 @@ export interface VisionAnalysisConfig {
   soundVolume?: number;
   regimeFilter?: RegimeFilterConfig; // Regime filter configuration
   backtest?: BacktestConfig; // Backtest mode configuration
+  newsConfig?: NewsConfig; // News analysis configuration
+  includeNews?: boolean; // Whether to include news analysis
 }
 
 /**
@@ -73,6 +76,7 @@ export interface TradingDecision {
   overallTrend: "bullish" | "bearish" | "neutral";
   marketStructure: string;
   warnings: string[];
+  newsAnalysis?: NewsAnalysis; // News sentiment and impact analysis
 }
 
 /**
@@ -117,6 +121,11 @@ export interface TradingVerdict {
   stopLoss?: number;
   takeProfit?: number;
   criticalWarnings: string[];
+  newsImpact?: {
+    sentiment: "bullish" | "bearish" | "neutral";
+    impactLevel: "low" | "medium" | "high";
+    significantEvents: string[];
+  };
 }
 
 /**
@@ -461,7 +470,7 @@ Focus on actionable insights for perpetual futures trading. Be specific about pr
 /**
  * Get multi-timeframe decision prompt
  */
-const getMultiTimeframePrompt = (analyses: ChartAnalysis[]): string => {
+const getMultiTimeframePrompt = (analyses: ChartAnalysis[], newsAnalysis?: NewsAnalysis): string => {
   const analysesText = analyses
     .map(
       (a) =>
@@ -471,36 +480,59 @@ const getMultiTimeframePrompt = (analyses: ChartAnalysis[]): string => {
     )
     .join("\n---\n");
 
+  const newsSection = newsAnalysis ? `
+
+---NEWS ANALYSIS---
+Overall Sentiment: ${newsAnalysis.overallSentiment.toUpperCase()} (${(newsAnalysis.sentimentScore * 100).toFixed(1)}%)
+Market Impact Level: ${newsAnalysis.marketImpactLevel.toUpperCase()}
+Articles Analyzed: ${newsAnalysis.totalArticles}
+Key Topics: ${newsAnalysis.keyTopics.join(", ")}
+Summary: ${newsAnalysis.summary}
+
+SIGNIFICANT NEWS EVENTS:
+${newsAnalysis.significantNews.slice(0, 3).map(news => 
+  `• [${news.sentiment?.toUpperCase() || 'NEUTRAL'}] ${news.title} (Relevance: ${((news.relevanceScore || 0) * 100).toFixed(0)}%)`
+).join("\n")}
+
+` : "";
+
   return `
 You are an expert cryptocurrency trader making a multi-timeframe trading decision for BTCUSD perpetual futures.
 
 Based on the following individual timeframe analyses:
 
-${analysesText}
+${analysesText}${newsSection}
 
 Provide a comprehensive trading decision that considers:
 
 1. **Multi-Timeframe Alignment**: How timeframes align or conflict
 2. **Market Structure**: Overall market structure and phase
-3. **Risk Management**: Appropriate position sizing and risk levels
-4. **Entry Strategy**: Best entry approach given the multi-timeframe view
-5. **Exit Strategy**: Stop loss and take profit recommendations
+3. **News Impact**: ${newsAnalysis ? `Consider the ${newsAnalysis.overallSentiment} news sentiment (${newsAnalysis.marketImpactLevel} impact) and significant events` : 'No news analysis available'}
+4. **Risk Management**: Appropriate position sizing and risk levels (consider news volatility)
+5. **Entry Strategy**: Best entry approach given the multi-timeframe view and news context
+6. **Exit Strategy**: Stop loss and take profit recommendations
+
+${newsAnalysis && newsAnalysis.marketImpactLevel === 'high' ? `
+⚠️ CRITICAL: High-impact news detected! This may cause increased volatility and override normal technical patterns.
+News sentiment is ${newsAnalysis.overallSentiment} - factor this heavily into your decision.
+` : ''}
 
 Respond in JSON format with this exact structure:
 {
   "action": "long|short|hold|close",
   "confidence": 1-10,
-  "reasoning": "detailed reasoning for the decision",
+  "reasoning": "detailed reasoning for the decision including news impact",
   "entryPrice": number or null,
   "stopLoss": number or null, 
   "takeProfit": number or null,
   "riskReward": number or null,
   "overallTrend": "bullish|bearish|neutral",
-  "marketStructure": "description of current market structure",
-  "warnings": ["array", "of", "important", "warnings"]
+  "marketStructure": "description of current market structure and news influence",
+  "warnings": ["array", "of", "important", "warnings", "including", "news", "risks"]
 }
 
-Focus on practical trading advice with specific price levels and risk management.
+Focus on practical trading advice with specific price levels, risk management, and news-driven considerations.
+${newsAnalysis ? `Consider how the ${newsAnalysis.overallSentiment} news sentiment and ${newsAnalysis.marketImpactLevel} impact level should influence position sizing and timing.` : ''}
 `;
 };
 
@@ -578,14 +610,15 @@ const analyzeChartImage = async (
 const makeMultiTimeframeDecision = async (
   openai: OpenAI,
   analyses: ChartAnalysis[],
-  config: VisionAnalysisConfig
+  config: VisionAnalysisConfig,
+  newsAnalysis?: NewsAnalysis
 ): Promise<TradingDecision> => {
   const stepLogger = createStepLogger("Multi-Timeframe Decision");
 
   try {
     stepLogger.start();
 
-    const prompt = getMultiTimeframePrompt(analyses);
+    const prompt = getMultiTimeframePrompt(analyses, newsAnalysis);
 
     logger.info("🧠 Making multi-timeframe trading decision...");
 
@@ -620,6 +653,7 @@ const makeMultiTimeframeDecision = async (
     const fullDecision: TradingDecision = {
       ...decision,
       timeframes: analyses,
+      ...(newsAnalysis && { newsAnalysis }),
     };
 
     logger.info(
@@ -780,14 +814,23 @@ const generateFinalVerdict = async (
       .map((a) => `${a.timeframe}: ${a.trend} (${a.confidence}%)`)
       .join(", ");
 
+    const newsContext = tradingDecision.newsAnalysis ? `
+NEWS SENTIMENT: ${tradingDecision.newsAnalysis.overallSentiment.toUpperCase()} (${(tradingDecision.newsAnalysis.sentimentScore * 100).toFixed(1)}%)
+NEWS IMPACT: ${tradingDecision.newsAnalysis.marketImpactLevel.toUpperCase()}
+KEY NEWS TOPICS: ${tradingDecision.newsAnalysis.keyTopics.join(", ")}
+SIGNIFICANT EVENTS: ${tradingDecision.newsAnalysis.significantNews.slice(0, 2).map(n => n.title).join(" | ")}
+
+` : "";
+
     const prompt = `You are a senior trading executive making the final decision. Based on all analysis, provide a definitive trading verdict.
 
 TIMEFRAME SIGNALS: ${timeframeSignals}
 OVERALL DECISION: ${tradingDecision.action} (${tradingDecision.confidence}/10)
 RISK LEVEL: ${comprehensiveAnalysis.riskAssessment.riskLevel}
 ALIGNMENT SCORE: ${comprehensiveAnalysis.quantitativeMetrics.timeframeAlignment}/10
-
+${newsContext}
 Your job is to make the FINAL EXECUTIVE DECISION. Be decisive and clear.
+${tradingDecision.newsAnalysis && tradingDecision.newsAnalysis.marketImpactLevel === 'high' ? '\n⚠️ CRITICAL: Factor in high-impact news events for this decision!' : ''}
 
 Guidelines:
 - confidence: 1-100% (your certainty in this decision)
@@ -911,6 +954,15 @@ BE DECISIVE. This is the final call that will be acted upon.`;
 
     // Parse the structured response
     let verdict = JSON.parse(functionCall.arguments) as TradingVerdict;
+    
+    // Add news impact if available
+    if (tradingDecision.newsAnalysis) {
+      verdict.newsImpact = {
+        sentiment: tradingDecision.newsAnalysis.overallSentiment,
+        impactLevel: tradingDecision.newsAnalysis.marketImpactLevel,
+        significantEvents: tradingDecision.newsAnalysis.significantNews.slice(0, 3).map(news => news.title)
+      };
+    }
 
     // Apply confidence-based position sizing override
     if (verdict.action !== "HOLD") {
@@ -1490,6 +1542,24 @@ export const executeVisionAnalysis = async (
     
     logger.info(`🔍 Regime Filter: ${regimeResult.passed ? "PASSED" : "FAILED"}`);
     
+    // Fetch and analyze crypto news if enabled
+    let newsAnalysis: NewsAnalysis | undefined;
+    if (config.includeNews !== false) {
+      try {
+        logger.info("📰 Fetching and analyzing crypto news...");
+        newsAnalysis = await fetchAndAnalyzeCryptoNews(config.newsConfig);
+        logNewsAnalysis(newsAnalysis);
+        
+        // Check for significant news that might override regime filter
+        if (!regimeResult.passed && newsAnalysis.marketImpactLevel === 'high') {
+          logger.warn("⚠️ High-impact news detected - considering override of regime filter");
+        }
+      } catch (error) {
+        logger.warn(`⚠️ News analysis failed: ${(error as Error).message}`);
+        logger.info("📈 Continuing with technical analysis only");
+      }
+    }
+    
     let tradingDecision: TradingDecision;
     
     if (!regimeResult.passed) {
@@ -1513,7 +1583,8 @@ export const executeVisionAnalysis = async (
       tradingDecision = await makeMultiTimeframeDecision(
         openai,
         individualAnalyses,
-        config
+        config,
+        newsAnalysis
       );
       
       // Validate AI decision matches regime recommendation
@@ -1637,6 +1708,13 @@ export const createVisionAnalysisConfig = (
   soundEffects: true,
   soundVolume: 0.7,
   regimeFilter: DEFAULT_REGIME_CONFIG, // Include regime filter by default
+  includeNews: true, // Enable news analysis by default
+  newsConfig: {
+    enableMultipleSources: true,
+    maxArticles: 50,
+    hoursLookback: 24,
+    minRelevanceScore: 0.6,
+  },
   ...options,
 });
 
@@ -1858,6 +1936,13 @@ export const logTradingDecisionDetails = (
     decision.warnings.forEach(warning => logger.warn(`   • ${warning}`));
   }
   
+  if (decision.newsAnalysis) {
+    logger.info(`📰 News Impact:`);
+    logger.info(`   Sentiment: ${decision.newsAnalysis.overallSentiment.toUpperCase()} (${(decision.newsAnalysis.sentimentScore * 100).toFixed(1)}%)`);
+    logger.info(`   Impact Level: ${decision.newsAnalysis.marketImpactLevel.toUpperCase()}`);
+    logger.info(`   Key Topics: ${decision.newsAnalysis.keyTopics.slice(0, 3).join(", ")}`);
+  }
+  
   if (regimeResult) {
     logger.info(`🔍 Regime Filter: ${regimeResult.passed ? "✅ PASSED" : "❌ BYPASSED"}`);
     if (regimeResult.recommendedAction && regimeResult.recommendedAction !== decision.action) {
@@ -1899,6 +1984,17 @@ export const logFinalVerdictDetails = (
   if (verdict.criticalWarnings.length > 0) {
     logger.warn(`🚨 CRITICAL WARNINGS:`);
     verdict.criticalWarnings.forEach(warning => logger.warn(`   • ${warning}`));
+  }
+  
+  if (verdict.newsImpact) {
+    logger.info("");
+    logger.info(`📰 NEWS IMPACT:`);
+    logger.info(`   Sentiment: ${verdict.newsImpact.sentiment.toUpperCase()}`);
+    logger.info(`   Impact Level: ${verdict.newsImpact.impactLevel.toUpperCase()}`);
+    if (verdict.newsImpact.significantEvents.length > 0) {
+      logger.info(`   Significant Events:`);
+      verdict.newsImpact.significantEvents.forEach(event => logger.info(`     • ${event}`));
+    }
   }
   
   if (analysisMetadata) {

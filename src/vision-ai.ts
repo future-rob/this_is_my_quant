@@ -27,6 +27,10 @@ function parseVisionArgs(): {
   soundEffects?: boolean;
   noSound?: boolean;
   soundVolume?: number;
+  includeNews?: boolean;
+  noNews?: boolean;
+  newsApiKey?: string;
+  cryptoCompareApiKey?: string;
 } {
   const args = process.argv.slice(2);
   const result: any = {};
@@ -68,6 +72,14 @@ function parseVisionArgs(): {
     } else if (arg === "--sound-volume" && i + 1 < args.length) {
       const value = args[++i];
       result.soundVolume = value ? parseFloat(value) : undefined;
+    } else if (arg === "--include-news") {
+      result.includeNews = true;
+    } else if (arg === "--no-news") {
+      result.noNews = true;
+    } else if (arg === "--news-api-key" && i + 1 < args.length) {
+      result.newsApiKey = args[++i];
+    } else if (arg === "--crypto-compare-api-key" && i + 1 < args.length) {
+      result.cryptoCompareApiKey = args[++i];
     }
   }
 
@@ -99,11 +111,16 @@ Options:
   --sound-effects          Enable sound effects (default: enabled)
   --no-sound               Disable sound effects
   --sound-volume <0.0-1.0> Sound volume level (default: 0.7)
+  --include-news           Include crypto news analysis (default: enabled)
+  --no-news                Disable news analysis
+  --news-api-key <key>     NewsAPI.org API key for additional news sources
+  --crypto-compare-api-key <key> CryptoCompare API key for enhanced news access
   --help, -h               Show this help message
 
 Prerequisites:
   • Chart screenshots must exist (run 'npm run start -- --multi-timeframe' first)
   • OPENAI_API_KEY environment variable must be set
+  • News API keys are optional but provide enhanced news coverage
 
 Examples:
   npm run start-vision-ai                           # Analyze all default timeframes
@@ -114,6 +131,8 @@ Examples:
   npm run start-vision-ai -- --output-dir reports   # Save to custom directory
   npm run start-vision-ai -- --no-sound             # Disable sound effects
   npm run start-vision-ai -- --sound-volume 0.3     # Lower volume sound effects
+  npm run start-vision-ai -- --no-news              # Disable news analysis
+  npm run start-vision-ai -- --news-api-key xyz123  # Use NewsAPI for additional sources
 
 Environment Setup:
   export OPENAI_API_KEY="your-api-key-here"
@@ -420,6 +439,18 @@ async function runVisionAnalysis() {
         soundEffects: args.soundEffects,
       }),
       ...(args.soundVolume !== undefined && { soundVolume: args.soundVolume }),
+      ...(args.noNews && { includeNews: false }),
+      ...(args.includeNews !== undefined && { includeNews: args.includeNews }),
+      ...((args.newsApiKey || args.cryptoCompareApiKey) && {
+        newsConfig: {
+          ...(args.newsApiKey && { newsApiKey: args.newsApiKey }),
+          ...(args.cryptoCompareApiKey && { cryptoCompareApiKey: args.cryptoCompareApiKey }),
+          enableMultipleSources: true,
+          maxArticles: 50,
+          hoursLookback: 24,
+          minRelevanceScore: 0.6,
+        },
+      }),
     });
 
     logger.info(`🔧 Configuration:`);
@@ -433,6 +464,11 @@ async function runVisionAnalysis() {
     logger.info(`   Sound Effects: ${config.soundEffects ? "Yes" : "No"}`);
     if (config.soundEffects) {
       logger.info(`   Sound Volume: ${config.soundVolume}`);
+    }
+    logger.info(`   News Analysis: ${config.includeNews ? "Enabled" : "Disabled"}`);
+    if (config.includeNews && config.newsConfig) {
+      logger.info(`   News Sources: ${config.newsConfig.enableMultipleSources ? "Multiple" : "Basic"}`);
+      logger.info(`   News Lookback: ${config.newsConfig.hoursLookback} hours`);
     }
     logger.info("");
 
