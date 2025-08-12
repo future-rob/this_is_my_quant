@@ -1,6 +1,6 @@
 # Jupiter Exchange AI Trading Analysis Tool
 
-A comprehensive automation tool that captures Jupiter Exchange chart screenshots across multiple timeframes and uses OpenAI's vision models to perform advanced technical analysis for cryptocurrency perpetual futures trading.
+A comprehensive automation tool that captures Jupiter Exchange chart screenshots across multiple timeframes and uses OpenAI's vision models to perform advanced technical analysis for cryptocurrency perpetual futures trading. **NEW: Now includes real-time crypto news analysis for enhanced trading decisions!**
 
 ## 🚀 Features
 
@@ -19,6 +19,18 @@ A comprehensive automation tool that captures Jupiter Exchange chart screenshots
 - **Trading Decisions**: Provides actionable trading recommendations with entry/exit points
 - **Risk Management**: Includes stop-loss, take-profit, and risk/reward calculations
 
+### 🆕 Crypto News Analysis
+
+- **Real-time News Fetching**: Automatically gathers crypto/BTC news from multiple sources
+- **Sentiment Analysis**: Analyzes news sentiment (bullish/bearish/neutral) with scoring
+- **Market Impact Assessment**: Determines if news events have low/medium/high market impact
+- **News Source Integration**: 
+  - CryptoCompare API (free tier available)
+  - NewsAPI.org (requires API key for enhanced coverage)
+  - CoinTelegraph RSS feed (free)
+- **Smart Filtering**: Filters and scores news by relevance to crypto/BTC
+- **Trading Integration**: News sentiment and impact directly influence trading decisions
+
 ## 📋 Prerequisites
 
 ### Required
@@ -27,11 +39,20 @@ A comprehensive automation tool that captures Jupiter Exchange chart screenshots
 - **OpenAI API Key** with vision model access
 - **Internet connection** for Jupiter Exchange access
 
+### Optional (Enhanced Features)
+
+- **NewsAPI.org API Key**: For additional news sources (free tier available)
+- **CryptoCompare API Key**: For enhanced news access and more data
+
 ### Environment Setup
 
 ```bash
-# Set your OpenAI API key
+# Set your OpenAI API key (required)
 export OPENAI_API_KEY="your-api-key-here"
+
+# Optional: Set news API keys for enhanced news coverage
+export NEWS_API_KEY="your-newsapi-key"
+export CRYPTO_COMPARE_API_KEY="your-cryptocompare-key"
 ```
 
 ## 🛠 Installation
@@ -68,12 +89,12 @@ npm run start -- --multi-timeframe --timeframes 5m,15m,1h
 npm run start -- --multi-timeframe --wait 8000
 ```
 
-### Step 2: Analyze Charts with AI
+### Step 2: Analyze Charts with AI (Now with News!)
 
-Analyze the captured screenshots using OpenAI vision models:
+Analyze the captured screenshots using OpenAI vision models with integrated news analysis:
 
 ```bash
-# Analyze all captured timeframes
+# Analyze all captured timeframes (news analysis enabled by default)
 npm run start-vision-ai
 
 # Analyze specific timeframes
@@ -82,16 +103,19 @@ npm run start-vision-ai -- --timeframes 5m,1h
 # Use a cheaper model for faster analysis
 npm run start-vision-ai -- --model gpt-4o-mini
 
-# Use low detail for cost savings
-npm run start-vision-ai -- --detail low
+# Disable news analysis if you want chart-only analysis
+npm run start-vision-ai -- --no-news
+
+# Provide news API keys for enhanced news coverage
+npm run start-vision-ai -- --news-api-key your-key --crypto-compare-api-key your-key
 ```
 
-### Step 3: Automated Trading Analysis (New!)
+### Step 3: Automated Trading Analysis (Enhanced with News!)
 
-**🤖 Auto Trader - Continuous Analysis Every 13 Minutes**
+**🤖 Auto Trader - Continuous Analysis Every 13 Minutes (Now with News Integration)**
 
 ```bash
-# Run automated analysis every 13 minutes
+# Run automated analysis every 13 minutes (includes news analysis)
 npm run auto-trader
 
 # Run with custom interval (15 minutes)
@@ -113,10 +137,11 @@ npm run auto-trader -- --help
 The auto-trader automatically:
 
 1. 📸 Captures charts for all specified timeframes
-2. 🤖 Runs AI vision analysis on the screenshots
-3. 💾 Saves analysis results to `analysis-results/` directory
-4. ⏰ Waits 13 minutes (or custom interval)
-5. 🔄 Repeats the process continuously
+2. 📰 **NEW**: Fetches and analyzes crypto news from multiple sources
+3. 🤖 Runs AI vision analysis on the screenshots with news context
+4. 💾 Saves analysis results to `analysis-results/` directory
+5. ⏰ Waits 13 minutes (or custom interval)
+6. 🔄 Repeats the process continuously
 
 **Stop the auto-trader**: Press `Ctrl+C`
 
@@ -147,196 +172,80 @@ npm run test-sounds
 
 ```bash
 --url <url>                 # Target URL (default: Jupiter Exchange)
---headed                    # Show browser window (default: headless mode)
---headless                  # Force headless mode (default: true)
---slowmo <ms>               # Add delay between actions
---wait <ms>                 # Wait time after page load
---method <method>           # Chart settings injection method
---multi-timeframe           # Enable multi-timeframe capture
---timeframes <list>         # Comma-separated timeframes
+--wait <ms>                 # Wait time after page load (default: 5000)
+--timeframes <list>         # Comma-separated timeframes (default: 5m,15m,1h,2h,6h)
+--headed                    # Show browser window (default: headless)
+--headless                  # Force headless mode
+--slowmo <ms>               # Add delay between actions for debugging
+--crop-screenshots          # Crop screenshots to chart area only
+--crop-preset <preset>      # Use predefined crop settings (jupiter, binance, etc.)
+--crop-config <config>      # Custom crop configuration (x,y,width,height)
 ```
 
-### Vision AI Options
+### Vision AI Analysis Options
 
 ```bash
---model <model>             # OpenAI model (gpt-4o, gpt-4o-mini, gpt-4-turbo)
---detail <level>            # Analysis detail (low, high, auto)
---timeframes <list>         # Timeframes to analyze
---screenshots-dir <dir>     # Screenshot directory
---max-tokens <number>       # Max tokens per API call
---temperature <number>      # Response randomness (0.0-1.0)
---output-dir <dir>          # Directory to save analysis results
---save-json                 # Save analysis as JSON file
---save-text                 # Save analysis as text report
---no-save                   # Disable saving files (display only)
+--model <model>             # OpenAI model (default: gpt-4o, options: gpt-4o-mini, gpt-4-turbo)
+--detail <level>            # Image detail level (default: high, options: low, high, auto)
+--timeframes <list>         # Specific timeframes to analyze
+--screenshots-dir <dir>     # Screenshot directory (default: screenshots)
+--max-tokens <number>       # Max tokens per API call (default: 1000)
+--temperature <number>      # Response randomness 0.0-1.0 (default: 0.1)
+--output-dir <dir>          # Output directory (default: analysis-results)
+--save-json                 # Save JSON analysis (default: enabled)
+--save-text                 # Save text report (default: enabled)
+--no-save                   # Display only, don't save files
 --sound-effects             # Enable sound effects (default: enabled)
 --no-sound                  # Disable sound effects
---sound-volume <0.0-1.0>    # Sound volume level (default: 0.7)
+--sound-volume <0.0-1.0>    # Sound volume (default: 0.7)
 ```
 
-## 📊 Analysis Output
-
-The vision AI analysis provides:
-
-### Individual Timeframe Analysis
-
-- **Trend Direction**: bullish/bearish/neutral/sideways
-- **Strength Score**: 1-10 scale
-- **Key Levels**: Support and resistance prices
-- **Technical Indicators**: Volume, Bollinger Bands, momentum
-- **Trading Signals**: Specific entry/exit signals
-- **Confidence Score**: AI confidence in analysis
-
-### Multi-timeframe Trading Decision
-
-- **Action**: long/short/hold/close recommendation
-- **Entry Price**: Suggested entry point
-- **Stop Loss**: Risk management level
-- **Take Profit**: Profit target
-- **Risk/Reward Ratio**: Expected return vs risk
-- **Market Structure**: Overall market phase analysis
-- **Warnings**: Important risk factors
-
-### Comprehensive Final Analysis
-
-- **Executive Summary**: High-level market assessment
-- **Market Overview**: Detailed market context and current situation
-- **Quantitative Metrics**: Signal counts, confidence scores, timeframe alignment
-- **Risk Assessment**: Risk level classification and mitigation strategies
-- **Strategic Recommendations**: Primary/alternative strategies with position sizing
-- **Next Steps**: Actionable follow-up tasks
-
-### Final Trading Verdict ← **NEW!**
-
-The system now provides a definitive executive decision using **OpenAI Function Calling** for guaranteed structured output:
-
-- **Action**: HOLD, LONG, or SHORT (clear directive)
-- **Confidence**: 1-100% certainty in the decision
-- **Position Size**: 1-100% of portfolio to risk
-- **Time Horizon**: Short (intraday), Medium (days), Long (weeks)
-- **Risk Level**: LOW, MEDIUM, or HIGH classification
-- **Key Reason**: Single sentence explaining the decision
-- **Execution Details**: Entry, stop loss, take profit levels
-- **Critical Warnings**: Key risks that could invalidate the decision
-
-**Key Benefits of Function Calling:**
-
-- ✅ **Guaranteed Structure**: No JSON parsing errors
-- ✅ **Type Safety**: Model must respond with exact schema
-- ✅ **Programmatic Use**: Clean data for trading bots
-- ✅ **Reliability**: Eliminates parsing failures
-
-### File Output
-
-Analysis results are automatically saved to files for review and tracking:
-
-**JSON Format** (`analysis-YYYY-MM-DDTHH-MM-SS.json`):
-
-- Structured data with all analysis results
-- Programmatically accessible for further processing
-- Includes metadata and timestamps
-
-**Text Report** (`analysis-YYYY-MM-DDTHH-MM-SS.txt`):
-
-- Human-readable formatted report
-- Complete analysis summary
-- Perfect for printing or sharing
-
-## 💡 Example Workflow
-
-### Complete Analysis Workflow
+### 🆕 News Analysis Options
 
 ```bash
-# 1. Capture charts for all timeframes (headless mode)
-npm run start -- --multi-timeframe
-
-# 2. Analyze charts with AI (now includes final verdict)
-npm run start-vision-ai
-
-# 3. Get definitive trading action
-# The system now provides a clear HOLD/LONG/SHORT decision with confidence %
-
-# 4. Review analysis files
-# Files saved to: analysis-results/analysis-YYYY-MM-DDTHH-MM-SS.json
-# Files saved to: analysis-results/analysis-YYYY-MM-DDTHH-MM-SS.txt
+--include-news              # Enable news analysis (default: enabled)
+--no-news                   # Disable news analysis
+--news-api-key <key>        # NewsAPI.org API key for additional sources
+--crypto-compare-api-key <key> # CryptoCompare API key for enhanced access
 ```
 
-### Quick Analysis (Specific Timeframes)
+### Auto Trader Options
 
 ```bash
-# 1. Capture key timeframes only
-npm run start -- --multi-timeframe --timeframes 15m,1h,2h
-
-# 2. Analyze with cost-optimized settings
-npm run start-vision-ai -- --timeframes 15m,1h,2h --model gpt-4o-mini --detail low
-
-# 3. Access structured data programmatically
-# JSON file contains clean, type-safe trading verdict for automated systems
+--interval <minutes>        # Analysis interval in minutes (default: 13)
+--timeframes <list>         # Timeframes to capture and analyze
+--model <model>             # OpenAI model for analysis
+--chart-capture-args <args> # Additional chart capture arguments
+--vision-ai-args <args>     # Additional vision AI arguments
+--max-retries <number>      # Max retry attempts (default: 3)
+--retry-delay <ms>          # Delay between retries (default: 5000)
+--once                      # Run single cycle and exit
+--continuous                # Run continuously (default behavior)
 ```
 
-### File Management Options
+## 📊 Enhanced Analysis Output
 
-```bash
-# Save to custom directory
-npm run start-vision-ai -- --output-dir trading-reports
+The system now provides comprehensive analysis including:
 
-# Display only (no file saving)
-npm run start-vision-ai -- --no-save
+### Technical Analysis
+- Multi-timeframe chart analysis
+- Support/resistance levels
+- Technical indicators (RSI, MACD, Volume, etc.)
+- Market structure assessment
 
-# Save only JSON (no text report)
-npm run start-vision-ai -- --no-save --save-json
-```
+### 🆕 News Analysis
+- Overall market sentiment (bullish/bearish/neutral)
+- Market impact level (low/medium/high)
+- Significant news events with relevance scoring
+- Key topic identification
+- News-driven risk assessment
 
-### Final Verdict Output Example
-
-```
-⚡ FINAL TRADING VERDICT
-==========================================
-🎯 ACTION: LONG
-📊 CONFIDENCE: 87%
-💰 POSITION SIZE: 15% of portfolio
-⏱️  TIME HORIZON: MEDIUM
-⚠️  RISK LEVEL: MEDIUM
-
-💡 KEY REASON: Strong bullish confluence across 1h-6h timeframes with volume confirmation.
-
-📋 EXECUTION DETAILS:
-   Entry: $45,200
-   Stop Loss: $43,800
-   Take Profit: $48,500
-
-🚀 EXECUTE: LONG 15% (87% confidence)
-==========================================
-```
-
-### Structured JSON Output
-
-For programmatic use, the system returns clean, type-safe JSON:
-
-```json
-{
-  "action": "LONG",
-  "confidence": 87,
-  "positionSize": 15,
-  "timeHorizon": "medium",
-  "riskLevel": "MEDIUM",
-  "keyReason": "Strong bullish confluence across 1h-6h timeframes with volume confirmation.",
-  "entryPrice": 45200,
-  "stopLoss": 43800,
-  "takeProfit": 48500,
-  "criticalWarnings": [
-    "Watch for breakdown below $44,000 support",
-    "High volatility during US market hours"
-  ]
-}
-```
-
-This structured output can be directly consumed by:
-
-- **Trading Bots**: Automated execution systems
-- **Portfolio Managers**: Position sizing algorithms
-- **Risk Systems**: Automated risk management
-- **Dashboards**: Real-time trading displays
+### Trading Decision
+- Definitive action (LONG/SHORT/HOLD)
+- Confidence percentage
+- Position sizing recommendations
+- Entry/exit points with risk management
+- **NEW**: News impact consideration in decision-making
 
 ## 📁 Project Structure
 
@@ -347,7 +256,8 @@ src/
 │   └── TRADING_VIEW_STATE.json    # TradingView settings
 ├── features/
 │   ├── web-automation.ts          # Chart capture automation
-│   └── vision-analysis.ts         # AI vision analysis
+│   ├── vision-analysis.ts         # AI vision analysis
+│   └── news-analysis.ts           # 🆕 Crypto news analysis
 ├── utils/
 │   ├── browser.ts                 # Playwright browser utilities
 │   └── logger.ts                  # Logging system
@@ -375,87 +285,85 @@ Generated Files:
 
 - **Vision Models**: GPT-4o for high accuracy, GPT-4o-mini for cost efficiency
 - **Prompt Engineering**: Specialized prompts for financial chart analysis
-- **Multi-pass Analysis**: Individual timeframe analysis → trading decision → comprehensive synthesis → final verdict
-- **Function Calling**: Structured output using OpenAI function calling for reliable data
-- **Text-based Final Analysis**: Cost-effective comprehensive analysis using text-only tokens
-- **Executive Decision**: Final AI call that provides definitive trading action
-- **Error Handling**: Robust error handling with retry logic
+- **Multi-timeframe Synthesis**: Combines insights across different time horizons
+- **Risk Management**: ATR-based stops, confidence-based position sizing
 
-## 📈 Cost Optimization
+### 🆕 News Integration
 
-### Vision API Costs
+- **Multiple Sources**: CryptoCompare, NewsAPI, CoinTelegraph RSS
+- **Smart Filtering**: Relevance scoring based on crypto/BTC keywords
+- **Sentiment Analysis**: Keyword-based sentiment classification
+- **Impact Assessment**: Determines market significance of news events
+- **Trading Integration**: News sentiment influences final trading decisions
 
-- **gpt-4o**: Higher accuracy, ~$0.01-0.03 per image
-- **gpt-4o-mini**: Cost-effective, ~$0.003-0.01 per image
-- **Detail Level**: Use "low" for 85 tokens vs "high" for variable tokens
-- **Timeframe Selection**: Analyze fewer timeframes to reduce costs
+## 🆕 News API Configuration
 
-### Recommendations
+### CryptoCompare (Recommended)
+- **Free Tier**: 250 requests/month without API key
+- **Paid Tiers**: Higher limits with API key
+- **Coverage**: Comprehensive crypto news with good categorization
 
-- Use `gpt-4o-mini` for development and testing
-- Use `detail: low` for quick analysis
-- Analyze 2-3 key timeframes instead of all 5 for cost savings
+### NewsAPI.org
+- **Free Tier**: 1000 requests/month
+- **Coverage**: General news sources with crypto filtering
+- **Setup**: Register at https://newsapi.org
 
-## ⚠️ Important Notes
+### CoinTelegraph RSS
+- **Free**: No API key required
+- **Coverage**: Latest crypto news from CoinTelegraph
+- **Limitations**: Limited to recent articles
 
-### Trading Disclaimer
+## 📈 Sample Analysis Output
 
-- **Not Financial Advice**: This tool provides technical analysis only
-- **Risk Management**: Always use proper position sizing and risk management
-- **Market Conditions**: AI analysis may not account for news or market events
-- **Backtesting**: Test strategies thoroughly before live trading
+```
+⚡ FINAL TRADING VERDICT
+==========================================
+🚀 ACTION: LONG
+📊 Confidence: 87%
+💰 Position Size: 15% of portfolio
+⏱️  TIME HORIZON: MEDIUM
+⚠️  RISK LEVEL: MEDIUM
 
-### Technical Limitations
+💡 KEY REASON: Strong bullish confluence across 1h-6h timeframes with positive news sentiment supporting the move.
 
-- **Image Quality**: Requires clear, unobstructed chart screenshots
-- **API Limits**: Subject to OpenAI rate limits and costs
-- **Browser Dependency**: Requires stable internet connection
-- **Market Hours**: Works best during active trading hours
+📰 NEWS IMPACT:
+   Sentiment: BULLISH (73.2%)
+   Impact Level: HIGH
+   Significant Events:
+     • Major institutional Bitcoin acquisition announced
+     • Regulatory clarity improves market outlook
 
-## 🐛 Troubleshooting
+📋 EXECUTION DETAILS:
+   Entry: $45,200
+   Stop Loss: $43,800
+   Take Profit: $48,500
 
-### Common Issues
-
-**No screenshots captured:**
-
-```bash
-# Check browser access and internet connection
-npm run start -- --help
+🚀 EXECUTE: LONG 15% (87% confidence)
+==========================================
 ```
 
-**OpenAI API errors:**
+## 🚨 Important Notes
 
-```bash
-# Verify API key is set
-echo $OPENAI_API_KEY
+- **News Analysis**: Enabled by default but can be disabled with `--no-news`
+- **API Keys**: News API keys are optional but provide enhanced coverage
+- **Rate Limits**: Be mindful of API rate limits for news sources
+- **Cost Optimization**: Use `gpt-4o-mini` for cost-effective analysis
+- **Internet Required**: Both chart capture and news analysis require internet access
 
-# Check API quota and limits
-npm run start-vision-ai -- --model gpt-4o-mini
-```
+## 🔐 Security & Privacy
 
-**Chart settings not applying:**
-
-```bash
-# Try different injection method
-npm run start -- --method jupiter
-```
-
-## 📝 License
-
-MIT License - see LICENSE file for details.
+- API keys are only stored in environment variables, never in code
+- News sources are accessed directly, no data is stored permanently
+- All analysis results are saved locally
 
 ## 🤝 Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+Contributions are welcome! Please feel free to submit pull requests or open issues for:
+- Additional news sources
+- Enhanced sentiment analysis algorithms
+- New technical indicators
+- Trading strategy improvements
 
-## 📞 Support
+## 📄 License
 
-For issues and questions:
-
-- Check the troubleshooting section
-- Review the command help: `npm run start -- --help`
-- Check OpenAI API documentation for vision model details
+MIT License - see LICENSE file for details.
