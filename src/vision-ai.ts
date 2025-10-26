@@ -1,13 +1,12 @@
 import { logger } from "./utils/logger";
 import {
   executeVisionAnalysis,
-  createVisionAnalysisConfig,
   VisionAnalysisResult,
   TradingDecision,
   ChartAnalysis,
-  ComprehensiveAnalysis,
   TradingVerdict,
 } from "./features/vision-analysis";
+import { createVisionAnalysisConfig } from "./config";
 
 /**
  * Parse command line arguments for vision analysis
@@ -84,8 +83,8 @@ function showVisionHelp() {
 Usage: npm run start-vision-ai [options]
 
 Options:
-  --model <model>           OpenAI model to use (default: gpt-4o)
-                           Available: gpt-4o, gpt-4o-mini, gpt-4-turbo
+  --model <model>           OpenRouter model to use (default: openai/gpt-4o)
+                           Available: openai/gpt-4o, openai/gpt-4o-mini, openai/gpt-4-turbo
   --detail <level>          Image analysis detail level (default: high)
                            Options: low, high, auto
   --timeframes <list>       Comma-separated timeframes to analyze (default: 5m,15m,1h,2h,6h)
@@ -103,12 +102,12 @@ Options:
 
 Prerequisites:
   • Chart screenshots must exist (run 'npm run start -- --multi-timeframe' first)
-  • OPENAI_API_KEY environment variable must be set
+  • OPENROUTER_API_KEY environment variable must be set
 
 Examples:
   npm run start-vision-ai                           # Analyze all default timeframes
   npm run start-vision-ai -- --timeframes 5m,1h     # Analyze specific timeframes
-  npm run start-vision-ai -- --model gpt-4o-mini    # Use cheaper model
+  npm run start-vision-ai -- --model openai/gpt-4o-mini    # Use cheaper model
   npm run start-vision-ai -- --detail low           # Faster, lower cost analysis
   npm run start-vision-ai -- --no-save              # Display only, don't save files
   npm run start-vision-ai -- --output-dir reports   # Save to custom directory
@@ -116,7 +115,7 @@ Examples:
   npm run start-vision-ai -- --sound-volume 0.3     # Lower volume sound effects
 
 Environment Setup:
-  export OPENAI_API_KEY="your-api-key-here"
+  export OPENROUTER_API_KEY="your-openrouter-api-key-here"
   `);
 }
 
@@ -195,74 +194,6 @@ function displayTradingDecision(decision: TradingDecision) {
 }
 
 /**
- * Display comprehensive analysis
- */
-function displayComprehensiveAnalysis(analysis: ComprehensiveAnalysis) {
-  logger.info("🧠 COMPREHENSIVE ANALYSIS");
-  logger.info("==========================================");
-  logger.info(`📋 Executive Summary:`);
-  logger.info(`   ${analysis.executiveSummary}`);
-  logger.info("");
-
-  logger.info(`🌐 Market Overview:`);
-  logger.info(`   ${analysis.marketOverview}`);
-  logger.info("");
-
-  logger.info(`📊 Quantitative Metrics:`);
-  logger.info(
-    `   Bullish Signals: ${analysis.quantitativeMetrics.bullishSignals}`
-  );
-  logger.info(
-    `   Bearish Signals: ${analysis.quantitativeMetrics.bearishSignals}`
-  );
-  logger.info(
-    `   Neutral Signals: ${analysis.quantitativeMetrics.neutralSignals}`
-  );
-  logger.info(
-    `   Average Confidence: ${analysis.quantitativeMetrics.avgConfidence.toFixed(
-      1
-    )}/10`
-  );
-  logger.info(
-    `   Timeframe Alignment: ${analysis.quantitativeMetrics.timeframeAlignment}/10`
-  );
-  logger.info("");
-
-  logger.info(`⚠️  Risk Assessment:`);
-  logger.info(
-    `   Risk Level: ${analysis.riskAssessment.riskLevel.toUpperCase()}`
-  );
-  logger.info(`   Key Risks:`);
-  analysis.riskAssessment.keyRisks.forEach((risk: string) => {
-    logger.info(`     • ${risk}`);
-  });
-  logger.info(`   Risk Mitigation:`);
-  analysis.riskAssessment.riskMitigation.forEach((mitigation: string) => {
-    logger.info(`     • ${mitigation}`);
-  });
-  logger.info("");
-
-  logger.info(`💡 Strategic Recommendations:`);
-  logger.info(`   Primary: ${analysis.strategicRecommendations.primary}`);
-  logger.info(
-    `   Alternative: ${analysis.strategicRecommendations.alternative}`
-  );
-  logger.info(
-    `   Time Horizon: ${analysis.strategicRecommendations.timeHorizon}`
-  );
-  logger.info(
-    `   Position Sizing: ${analysis.strategicRecommendations.positionSizing}`
-  );
-  logger.info("");
-
-  logger.info(`🎯 Next Steps:`);
-  analysis.nextSteps.forEach((step: string, index: number) => {
-    logger.info(`   ${index + 1}. ${step}`);
-  });
-  logger.info("==========================================");
-}
-
-/**
  * Display final trading verdict
  */
 function displayFinalVerdict(verdict: TradingVerdict) {
@@ -274,6 +205,9 @@ function displayFinalVerdict(verdict: TradingVerdict) {
   logger.info(`💰 POSITION SIZE: ${verdict.positionSize}% of portfolio`);
   logger.info(`⏱️  TIME HORIZON: ${verdict.timeHorizon.toUpperCase()}`);
   logger.info(`⚠️  RISK LEVEL: ${verdict.riskLevel}`);
+  if ((verdict as any).btcPrice) {
+    logger.info(`💱 BTC PRICE: $${(verdict as any).btcPrice}`);
+  }
   logger.info("");
   logger.info(`💡 KEY REASON: ${verdict.keyReason}`);
 
@@ -337,12 +271,6 @@ function displayAnalysisSummary(result: VisionAnalysisResult) {
     displayTradingDecision(result.tradingDecision);
   }
 
-  // Display comprehensive analysis
-  if (result.comprehensiveAnalysis) {
-    logger.info("");
-    displayComprehensiveAnalysis(result.comprehensiveAnalysis);
-  }
-
   // Display final trading verdict
   if (result.finalVerdict) {
     logger.info("");
@@ -354,10 +282,12 @@ function displayAnalysisSummary(result: VisionAnalysisResult) {
  * Check prerequisites
  */
 function checkPrerequisites(): boolean {
-  // Check OpenAI API key
-  if (!process.env.OPENAI_API_KEY) {
-    logger.error("❌ OPENAI_API_KEY environment variable is required");
-    logger.info('   Set it with: export OPENAI_API_KEY="your-api-key-here"');
+  // Check OpenRouter API key
+  if (!process.env.OPENROUTER_API_KEY) {
+    logger.error("❌ OPENROUTER_API_KEY environment variable is required");
+    logger.info(
+      '   Set it with: export OPENROUTER_API_KEY="your-openrouter-api-key-here"'
+    );
     return false;
   }
 

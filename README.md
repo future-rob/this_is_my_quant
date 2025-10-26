@@ -396,6 +396,77 @@ Generated Files:
 - Use `detail: low` for quick analysis
 - Analyze 2-3 key timeframes instead of all 5 for cost savings
 
+## 🧪 Vision AI Backtesting (New!)
+
+**Test Vision Analysis Accuracy Against Labeled Chart Data**
+
+The backtesting feature allows you to test the vision AI's accuracy against labeled chart screenshots organized by expected trend outcomes.
+
+### Backtest Setup
+
+```bash
+# Create test data directory structure
+backtest-data/
+├── bullish/     # Clear upward trends
+├── bearish/     # Clear downward trends  
+├── neutral/     # No clear bias
+└── sideways/    # Horizontal movement
+```
+
+### Image Organization
+
+Name images with timeframe prefixes:
+- `5m_bullish_breakout_001.png`
+- `1h_bearish_breakdown.jpg`
+- `15m_neutral_consolidation.png`
+
+### Running Backtests
+
+```bash
+# Basic backtest
+npm run backtest-vision
+
+# Custom options
+npm run backtest-vision -- --test-data-dir my-test-data --model openai/gpt-4o-mini
+
+# Quick test (10 images per category)
+npm run backtest-vision -- --max-images 10 --verbose
+
+# Test specific trends/timeframes
+npm run backtest-vision -- --trends bullish,bearish --timeframes 5m,1h
+```
+
+### Backtest Results
+
+The system generates comprehensive accuracy reports:
+
+- **Overall Accuracy**: Total correct predictions percentage
+- **Per-Category Metrics**: Accuracy for bullish/bearish/neutral/sideways
+- **Confusion Matrix**: Detailed prediction vs. expected breakdown  
+- **Timeframe Analysis**: Performance across different timeframes
+- **Cost Analysis**: API usage and processing time
+- **Detailed Reports**: Both JSON (programmatic) and text (human-readable)
+
+### Expected Performance
+
+- **Clear trends**: 85-95% accuracy
+- **Moderate trends**: 70-85% accuracy  
+- **Subtle/mixed trends**: 60-75% accuracy
+- **Note**: Lower accuracy on neutral/sideways is normal (more subjective)
+
+### Backtest Options
+
+```bash
+--test-data-dir <dir>        Test data directory (default: backtest-data)
+--model <model>              AI model (default: openai/gpt-4o)
+--detail <level>             Analysis detail: low, high, auto
+--trends <list>              Test specific trends: bullish,bearish,neutral,sideways
+--timeframes <list>          Test specific timeframes: 5m,15m,1h,2h,6h
+--max-images <number>        Limit images per category
+--verbose                    Detailed logging
+--no-save                    Don't save results to files
+```
+
 ## ⚠️ Important Notes
 
 ### Trading Disclaimer
@@ -459,3 +530,36 @@ For issues and questions:
 - Check the troubleshooting section
 - Review the command help: `npm run start -- --help`
 - Check OpenAI API documentation for vision model details
+
+---
+
+## 📊 Quant Decision Dashboard (Next.js)
+
+A lightweight Next.js dashboard (in `dashboard/`) provides real‑time visualization of analysis outputs.
+
+### Features
+* Action & Confidence time series (line + colored action dots)
+* Multi-timeframe Support/Resistance comparison with timeframe toggles
+* Trend Heatmap (timeframes vs historical snapshots)
+* Strength vs Confidence Radar (latest snapshot)
+* Signal Distribution Pie (latest snapshot)
+* Collapsible raw JSON viewer (for auditing / debugging)
+* Auto-refresh every 60 seconds
+
+### Running
+```
+cd dashboard
+npm install   # once
+npm run dev
+```
+Open http://localhost:3000
+
+### Extending
+Add new charts in `dashboard/src/components/charts/` and augment transformations in `dashboard/src/components/data/transform.ts`.
+
+### Tech
+* Next.js 15 (React 19)
+* Recharts for visualization
+* Minimal custom CSS (dark-theme friendly)
+
+---

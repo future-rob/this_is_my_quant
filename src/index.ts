@@ -3,9 +3,11 @@ import { logger } from "./utils/logger";
 import {
   executeWebAutomation,
   executeMultiTimeframeAutomation,
+} from "./features/web-automation";
+import {
   createJupiterAutomation,
   createJupiterAutomationWithSettings,
-} from "./features/web-automation";
+} from "./config";
 import { chartSettings } from "./config/chart-settings";
 import {
   testCropConfiguration,
